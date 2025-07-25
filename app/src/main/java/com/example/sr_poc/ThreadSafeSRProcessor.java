@@ -17,6 +17,8 @@ import org.tensorflow.lite.gpu.GpuDelegate;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class ThreadSafeSRProcessor {
@@ -50,9 +52,18 @@ public class ThreadSafeSRProcessor {
     private int actualOutputWidth;
     private int actualOutputHeight;
     
+    // 並行處理執行器
+    private ExecutorService conversionExecutor;
+    
     public ThreadSafeSRProcessor(Context context) {
         this.context = context;
         this.configManager = ConfigManager.getInstance(context);
+        
+        // 初始化並行處理執行器 - 使用CPU核心數
+        int cores = Runtime.getRuntime().availableProcessors();
+        conversionExecutor = Executors.newFixedThreadPool(Math.min(cores, 4)); // 最多4個線程
+        Log.d(TAG, "Initialized conversion executor with " + Math.min(cores, 4) + " threads");
+        
         initializeThread();
     }
     
@@ -605,27 +616,11 @@ public class ThreadSafeSRProcessor {
         
         try {
             if (outputDataType == DataType.FLOAT32) {
-                // 處理float32輸出
-                for (int i = 0; i < outputWidth * outputHeight; i++) {
-                    float r = Math.max(0, Math.min(1, outputBuffer.getBuffer().getFloat()));
-                    float g = Math.max(0, Math.min(1, outputBuffer.getBuffer().getFloat()));
-                    float b = Math.max(0, Math.min(1, outputBuffer.getBuffer().getFloat()));
-                    
-                    int red = (int) (r * 255);
-                    int green = (int) (g * 255);
-                    int blue = (int) (b * 255);
-                    
-                    pixels[i] = 0xFF000000 | (red << 16) | (green << 8) | blue;
-                }
+                // 優化的float32輸出處理 - 批量處理
+                convertFloat32OutputToPixels(pixels, outputWidth * outputHeight);
             } else if (outputDataType == DataType.UINT8) {
-                // 處理uint8輸出
-                for (int i = 0; i < outputWidth * outputHeight; i++) {
-                    int r = outputBuffer.getBuffer().get() & 0xFF;
-                    int g = outputBuffer.getBuffer().get() & 0xFF;
-                    int b = outputBuffer.getBuffer().get() & 0xFF;
-                    
-                    pixels[i] = 0xFF000000 | (r << 16) | (g << 8) | b;
-                }
+                // 優化的uint8輸出處理 - 批量處理
+                convertUint8OutputToPixels(pixels, outputWidth * outputHeight);
             } else {
                 Log.e(TAG, "Unsupported output data type: " + outputDataType);
                 return null;
@@ -636,6 +631,159 @@ public class ThreadSafeSRProcessor {
         }
         
         return Bitmap.createBitmap(pixels, outputWidth, outputHeight, Bitmap.Config.ARGB_8888);
+    }
+    
+    /**
+     * 優化的float32到像素轉換 - 並行處理版本
+     */
+    private void convertFloat32OutputToPixels(int[] pixels, int totalPixels) {
+        // 批量讀取所有float數據到數組
+        int totalFloats = totalPixels * 3; // RGB 3個通道
+        float[] floatData = new float[totalFloats];
+        
+        // 一次性讀取所有float數據
+        outputBuffer.getBuffer().asFloatBuffer().get(floatData);
+        
+        // 決定是否使用並行處理 - 只有大圖才值得並行處理開銷
+        if (totalPixels > 1000000) { // 大於100萬像素使用並行
+            convertFloat32Parallel(pixels, floatData, totalPixels);
+        } else {
+            convertFloat32Sequential(pixels, floatData, totalPixels);
+        }
+    }
+    
+    /**
+     * 並行轉換float32數據
+     */
+    private void convertFloat32Parallel(int[] pixels, float[] floatData, int totalPixels) {
+        int numThreads = Math.min(4, Runtime.getRuntime().availableProcessors());
+        int pixelsPerThread = totalPixels / numThreads;
+        CountDownLatch latch = new CountDownLatch(numThreads);
+        
+        for (int t = 0; t < numThreads; t++) {
+            final int threadIndex = t;
+            final int startPixel = t * pixelsPerThread;
+            final int endPixel = (t == numThreads - 1) ? totalPixels : (t + 1) * pixelsPerThread;
+            
+            conversionExecutor.submit(() -> {
+                try {
+                    // 處理這個線程負責的像素範圍
+                    for (int i = startPixel, floatIndex = startPixel * 3; i < endPixel; i++, floatIndex += 3) {
+                        float r = floatData[floatIndex];
+                        float g = floatData[floatIndex + 1];
+                        float b = floatData[floatIndex + 2];
+                        
+                        // 快速clamp和轉換
+                        int red = (int) (Math.max(0, Math.min(1, r)) * 255);
+                        int green = (int) (Math.max(0, Math.min(1, g)) * 255);
+                        int blue = (int) (Math.max(0, Math.min(1, b)) * 255);
+                        
+                        pixels[i] = 0xFF000000 | (red << 16) | (green << 8) | blue;
+                    }
+                } finally {
+                    latch.countDown();
+                }
+            });
+        }
+        
+        try {
+            latch.await(); // 等待所有線程完成
+        } catch (InterruptedException e) {
+            Log.e(TAG, "Parallel conversion interrupted", e);
+            Thread.currentThread().interrupt();
+        }
+    }
+    
+    /**
+     * 序列轉換float32數據 (小圖片使用)
+     */
+    private void convertFloat32Sequential(int[] pixels, float[] floatData, int totalPixels) {
+        // 批量轉換 - 減少循環開銷和函數調用
+        for (int i = 0, floatIndex = 0; i < totalPixels; i++, floatIndex += 3) {
+            // 直接處理3個float值，避免重複的Math.max/Math.min調用
+            float r = floatData[floatIndex];
+            float g = floatData[floatIndex + 1];
+            float b = floatData[floatIndex + 2];
+            
+            // 更快的clamp和轉換 - 使用位運算優化
+            int red = (int) (Math.max(0, Math.min(1, r)) * 255);
+            int green = (int) (Math.max(0, Math.min(1, g)) * 255);
+            int blue = (int) (Math.max(0, Math.min(1, b)) * 255);
+            
+            // 使用位運算組合RGB
+            pixels[i] = 0xFF000000 | (red << 16) | (green << 8) | blue;
+        }
+    }
+    
+    /**
+     * 優化的uint8到像素轉換 - 並行處理版本
+     */
+    private void convertUint8OutputToPixels(int[] pixels, int totalPixels) {
+        // 批量讀取所有byte數據到數組
+        int totalBytes = totalPixels * 3; // RGB 3個通道
+        byte[] byteData = new byte[totalBytes];
+        
+        // 一次性讀取所有byte數據
+        outputBuffer.getBuffer().get(byteData);
+        
+        // 決定是否使用並行處理
+        if (totalPixels > 1000000) { // 大於100萬像素使用並行
+            convertUint8Parallel(pixels, byteData, totalPixels);
+        } else {
+            convertUint8Sequential(pixels, byteData, totalPixels);
+        }
+    }
+    
+    /**
+     * 並行轉換uint8數據
+     */
+    private void convertUint8Parallel(int[] pixels, byte[] byteData, int totalPixels) {
+        int numThreads = Math.min(4, Runtime.getRuntime().availableProcessors());
+        int pixelsPerThread = totalPixels / numThreads;
+        CountDownLatch latch = new CountDownLatch(numThreads);
+        
+        for (int t = 0; t < numThreads; t++) {
+            final int threadIndex = t;
+            final int startPixel = t * pixelsPerThread;
+            final int endPixel = (t == numThreads - 1) ? totalPixels : (t + 1) * pixelsPerThread;
+            
+            conversionExecutor.submit(() -> {
+                try {
+                    // 處理這個線程負責的像素範圍
+                    for (int i = startPixel, byteIndex = startPixel * 3; i < endPixel; i++, byteIndex += 3) {
+                        int r = byteData[byteIndex] & 0xFF;
+                        int g = byteData[byteIndex + 1] & 0xFF;
+                        int b = byteData[byteIndex + 2] & 0xFF;
+                        
+                        pixels[i] = 0xFF000000 | (r << 16) | (g << 8) | b;
+                    }
+                } finally {
+                    latch.countDown();
+                }
+            });
+        }
+        
+        try {
+            latch.await(); // 等待所有線程完成
+        } catch (InterruptedException e) {
+            Log.e(TAG, "Parallel conversion interrupted", e);
+            Thread.currentThread().interrupt();
+        }
+    }
+    
+    /**
+     * 序列轉換uint8數據 (小圖片使用)
+     */
+    private void convertUint8Sequential(int[] pixels, byte[] byteData, int totalPixels) {
+        // 批量轉換 - 使用位運算優化
+        for (int i = 0, byteIndex = 0; i < totalPixels; i++, byteIndex += 3) {
+            int r = byteData[byteIndex] & 0xFF;
+            int g = byteData[byteIndex + 1] & 0xFF;
+            int b = byteData[byteIndex + 2] & 0xFF;
+            
+            // 使用位運算組合RGB
+            pixels[i] = 0xFF000000 | (r << 16) | (g << 8) | b;
+        }
     }
     
     public void close() {
@@ -656,6 +804,19 @@ public class ThreadSafeSRProcessor {
                 currentInterpreter = null;
                 Log.d(TAG, "All resources released");
             });
+        }
+        
+        // 關閉並行處理執行器
+        if (conversionExecutor != null) {
+            conversionExecutor.shutdown();
+            try {
+                if (!conversionExecutor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                    conversionExecutor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                conversionExecutor.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
         }
         
         if (srThread != null) {
