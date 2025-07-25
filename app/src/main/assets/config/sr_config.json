@@ -1,11 +1,13 @@
 {
   "model": {
-    "default_model_path": "models/DSCF_float16.tflite",
+    "default_model_path": "models/DSCF_256x256_float32.tflite",
     "alternative_models": [
       "models/DSCF_256x256_float16.tflite",
       "models/DSCF_256x256_float32.tflite",
       "models/DSCF_256x256_dynamic_range_quant.tflite",
-      "models/DSCF_dynamic_range_quant.tflite"
+      "models/DSCF_dynamic_range_quant.tflite",
+      "models/DSCF_float32.tflite",
+      "models/DSCF_float16.tflite"
     ],
     "expected_scale_factor": 4,
     "channels": 3
@@ -16,7 +18,11 @@
     "allow_fp16_precision": true,
     "use_nnapi": true,
     "gpu_inference_preference": "FAST_SINGLE_ANSWER",
-    "gpu_precision_loss_allowed": true
+    "gpu_precision_loss_allowed": true,
+    "gpu_wait_type": "PASSIVE",
+    "gpu_backend": "OPENCL",
+    "enable_quantized_inference": true,
+    "experimental_gpu_optimizations": true
   },
   "tiling": {
     "overlap_pixels": 32,

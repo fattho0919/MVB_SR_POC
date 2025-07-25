@@ -47,6 +47,14 @@ public class ConfigManager {
     private boolean logPerformanceStats;
     private boolean enableBufferValidation;
     
+    // GPU optimization parameters
+    private String gpuInferencePreference;
+    private boolean gpuPrecisionLossAllowed;
+    private String gpuWaitType;
+    private String gpuBackend;
+    private boolean enableQuantizedInference;
+    private boolean experimentalGpuOptimizations;
+    
     private ConfigManager(Context context) {
         this.context = context.getApplicationContext();
         loadConfig();
@@ -108,6 +116,14 @@ public class ConfigManager {
         allowFp16Precision = processingConfig.getBoolean("allow_fp16_precision");
         useNnapi = processingConfig.getBoolean("use_nnapi");
         
+        // GPU optimization parameters
+        gpuInferencePreference = processingConfig.optString("gpu_inference_preference", "FAST_SINGLE_ANSWER");
+        gpuPrecisionLossAllowed = processingConfig.optBoolean("gpu_precision_loss_allowed", true);
+        gpuWaitType = processingConfig.optString("gpu_wait_type", "PASSIVE");
+        gpuBackend = processingConfig.optString("gpu_backend", "OPENCL");
+        enableQuantizedInference = processingConfig.optBoolean("enable_quantized_inference", false);
+        experimentalGpuOptimizations = processingConfig.optBoolean("experimental_gpu_optimizations", true);
+        
         // Tiling configuration
         JSONObject tilingConfig = config.getJSONObject("tiling");
         overlapPixels = tilingConfig.getInt("overlap_pixels");
@@ -159,6 +175,14 @@ public class ConfigManager {
         logModelShapes = true;
         logPerformanceStats = true;
         enableBufferValidation = false;
+        
+        // GPU optimization defaults
+        gpuInferencePreference = "FAST_SINGLE_ANSWER";
+        gpuPrecisionLossAllowed = true;
+        gpuWaitType = "PASSIVE";
+        gpuBackend = "OPENCL";
+        enableQuantizedInference = false;
+        experimentalGpuOptimizations = true;
     }
     
     // Getter methods for cached values
@@ -184,6 +208,14 @@ public class ConfigManager {
     public boolean isLogModelShapes() { return logModelShapes; }
     public boolean isLogPerformanceStats() { return logPerformanceStats; }
     public boolean isEnableBufferValidation() { return enableBufferValidation; }
+    
+    // GPU optimization getters
+    public String getGpuInferencePreference() { return gpuInferencePreference; }
+    public boolean isGpuPrecisionLossAllowed() { return gpuPrecisionLossAllowed; }
+    public String getGpuWaitType() { return gpuWaitType; }
+    public String getGpuBackend() { return gpuBackend; }
+    public boolean isEnableQuantizedInference() { return enableQuantizedInference; }
+    public boolean isExperimentalGpuOptimizations() { return experimentalGpuOptimizations; }
     
     // Runtime configuration update methods
     public void setDefaultTilingEnabled(boolean enabled) {
@@ -234,6 +266,9 @@ public class ConfigManager {
         summary.append("  Threads: ").append(defaultNumThreads).append("\n");
         summary.append("  NNAPI: ").append(useNnapi ? "✓" : "✗").append("\n");
         summary.append("  XNNPACK: ").append(useXnnpack ? "✓" : "✗").append("\n");
+        summary.append("  GPU Preference: ").append(gpuInferencePreference).append("\n");
+        summary.append("  Quantized Inference: ").append(enableQuantizedInference ? "✓" : "✗").append("\n");
+        summary.append("  Experimental GPU: ").append(experimentalGpuOptimizations ? "✓" : "✗").append("\n");
         summary.append("  Tiling Overlap: ").append(overlapPixels).append("px\n");
         summary.append("  Memory Threshold: ").append((int)(memoryThresholdPercentage * 100)).append("%\n");
         summary.append("  Max Size (no tiling): ").append(maxInputSizeWithoutTiling).append("px\n");

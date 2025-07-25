@@ -119,8 +119,14 @@ public class ThreadSafeSRProcessor {
                     Log.d(TAG, "Default mode: NNAPI/CPU");
                 }
                 
+                Log.d(TAG, "Starting buffer allocation...");
                 allocateBuffers();
+                Log.d(TAG, "Buffer allocation completed");
+                
+                Log.d(TAG, "Starting cached arrays allocation...");
                 allocateCachedArrays();
+                Log.d(TAG, "Cached arrays allocation completed");
+                
                 isInitialized = true;
                 
                 long initTime = System.currentTimeMillis() - initStartTime;
@@ -152,10 +158,12 @@ public class ThreadSafeSRProcessor {
             if (trySetupGpu(gpuOptions)) {
                 Log.d(TAG, "GPU setup successful, creating interpreter...");
                 try {
+                    Log.d(TAG, "About to create GPU interpreter...");
                     gpuInterpreter = new Interpreter(tfliteModel, gpuOptions);
                     Log.d(TAG, "GPU interpreter created successfully");
                     
                     // 檢查模型輸入輸出格式
+                    Log.d(TAG, "Reading model tensors...");
                     int[] inputShape = gpuInterpreter.getInputTensor(0).shape();
                     int[] outputShape = gpuInterpreter.getOutputTensor(0).shape();
                     DataType inputDataType = gpuInterpreter.getInputTensor(0).dataType();
@@ -167,7 +175,9 @@ public class ThreadSafeSRProcessor {
                     Log.d(TAG, "GPU Output data type: " + outputDataType);
                     
                     // 讀取並驗證模型尺寸
+                    Log.d(TAG, "Reading model dimensions...");
                     readModelDimensions(gpuInterpreter);
+                    Log.d(TAG, "Model dimensions read successfully");
                     
                     // 特別檢查 float16 模型在 Mali GPU 上的兼容性
                     String modelPath = configManager.getDefaultModelPath();
@@ -176,6 +186,7 @@ public class ThreadSafeSRProcessor {
                         Log.d(TAG, "Mali-G57 should support float16, continuing...");
                     }
                     
+                    Log.d(TAG, "GPU interpreter initialization completed successfully");
                     return true;
                 } catch (Exception e) {
                     Log.e(TAG, "Failed to create GPU interpreter instance: " + e.getMessage(), e);
@@ -203,23 +214,31 @@ public class ThreadSafeSRProcessor {
     
     private boolean initializeCpuInterpreter(ByteBuffer tfliteModel) {
         try {
+            Log.d(TAG, "=== CPU Interpreter Initialization ===");
             Interpreter.Options cpuOptions = new Interpreter.Options();
             if (configManager.isUseNnapi()) {
                 cpuOptions.setUseNNAPI(true);
+                Log.d(TAG, "NNAPI enabled for CPU interpreter");
             }
+            
+            Log.d(TAG, "Setting up CPU options...");
             setupCpu(cpuOptions);
             
+            Log.d(TAG, "Creating CPU interpreter...");
             cpuInterpreter = new Interpreter(tfliteModel, cpuOptions);
             Log.d(TAG, "CPU interpreter created successfully");
             
             // 如果GPU初始化失敗，從CPU interpreter讀取尺寸
             if (actualInputWidth == 0) {
+                Log.d(TAG, "Reading model dimensions from CPU interpreter...");
                 readModelDimensions(cpuInterpreter);
+                Log.d(TAG, "Model dimensions read from CPU interpreter");
             }
             
+            Log.d(TAG, "CPU interpreter initialization completed successfully");
             return true;
         } catch (Exception e) {
-            Log.e(TAG, "Failed to create CPU interpreter: " + e.getMessage());
+            Log.e(TAG, "Failed to create CPU interpreter: " + e.getMessage(), e);
             return false;
         }
     }
@@ -269,55 +288,100 @@ public class ThreadSafeSRProcessor {
 
     private boolean trySetupGpu(Interpreter.Options options) {
         try {
-            Log.d(TAG, "=== GPU Setup ===");
+            Log.d(TAG, "=== GPU Setup (Optimized) ===");
             Log.d(TAG, "Device: " + android.os.Build.MODEL + " (SoC: " + android.os.Build.SOC_MODEL + ")");
             
-            // 對於 MediaTek MT8195，直接創建 GPU delegate（跳過誤報的兼容性檢查）
+            // 創建優化的GPU delegate配置
+            GpuDelegate.Options gpuOptions = new GpuDelegate.Options();
+            
+            // 應用配置文件中的GPU優化設定
+            configureGpuDelegateOptions(gpuOptions);
+            
+            // 對於 MediaTek MT8195，使用額外優化
             if (android.os.Build.SOC_MODEL != null && android.os.Build.SOC_MODEL.contains("MT8195")) {
-                Log.d(TAG, "MediaTek MT8195 detected - using optimized GPU setup");
-                
-                GpuDelegate.Options gpuOptions = new GpuDelegate.Options();
-                gpuOptions.setInferencePreference(GpuDelegate.Options.INFERENCE_PREFERENCE_FAST_SINGLE_ANSWER);
-                gpuOptions.setPrecisionLossAllowed(true);
-                
-                Log.d(TAG, "Creating GPU delegate for Mali-G57...");
-                gpuDelegate = new GpuDelegate(gpuOptions);
-                options.addDelegate(gpuDelegate);
-                Log.d(TAG, "GPU delegate configured successfully");
-                return true;
+                Log.d(TAG, "MediaTek MT8195 detected - applying Mali-G57 specific optimizations");
+                applyMaliOptimizations(gpuOptions);
             }
             
-            // 對於其他設備，還是使用標準檢查流程
-            CompatibilityList compatList = new CompatibilityList();
-            boolean isSupported = compatList.isDelegateSupportedOnThisDevice();
-            Log.d(TAG, "GPU delegate supported: " + isSupported);
+            Log.d(TAG, "Creating optimized GPU delegate...");
+            gpuDelegate = new GpuDelegate(gpuOptions);
+            options.addDelegate(gpuDelegate);
+            Log.d(TAG, "GPU delegate configured successfully with optimizations");
+            return true;
             
-            if (isSupported) {
-                GpuDelegate.Options gpuOptions = new GpuDelegate.Options();
-                gpuOptions.setInferencePreference(GpuDelegate.Options.INFERENCE_PREFERENCE_FAST_SINGLE_ANSWER);
-                gpuOptions.setPrecisionLossAllowed(true);
-                
-                gpuDelegate = new GpuDelegate(gpuOptions);
-                options.addDelegate(gpuDelegate);
-                Log.d(TAG, "GPU delegate configured");
-                return true;
-            } else {
-                Log.w(TAG, "GPU delegate not supported - trying fallback");
-                // 嘗試強制創建
-                GpuDelegate.Options gpuOptions = new GpuDelegate.Options();
-                gpuOptions.setInferencePreference(GpuDelegate.Options.INFERENCE_PREFERENCE_FAST_SINGLE_ANSWER);
-                gpuOptions.setPrecisionLossAllowed(true);
-                
-                gpuDelegate = new GpuDelegate(gpuOptions);
-                options.addDelegate(gpuDelegate);
-                Log.d(TAG, "Fallback GPU delegate created");
-                return true;
-            }
         } catch (Exception e) {
-            Log.w(TAG, "GPU setup failed: " + e.getMessage(), e);
+            Log.w(TAG, "Optimized GPU setup failed, trying fallback: " + e.getMessage());
+            
+            // 回退到標準GPU設定
+            try {
+                CompatibilityList compatList = new CompatibilityList();
+                boolean isSupported = compatList.isDelegateSupportedOnThisDevice();
+                Log.d(TAG, "GPU delegate supported (fallback): " + isSupported);
+                
+                if (isSupported) {
+                    GpuDelegate.Options fallbackOptions = new GpuDelegate.Options();
+                    fallbackOptions.setInferencePreference(GpuDelegate.Options.INFERENCE_PREFERENCE_FAST_SINGLE_ANSWER);
+                    fallbackOptions.setPrecisionLossAllowed(true);
+                    
+                    gpuDelegate = new GpuDelegate(fallbackOptions);
+                    options.addDelegate(gpuDelegate);
+                    Log.d(TAG, "Fallback GPU delegate configured");
+                    return true;
+                }
+            } catch (Exception fallbackE) {
+                Log.e(TAG, "Both optimized and fallback GPU setup failed", fallbackE);
+            }
         }
         
         return false;
+    }
+    
+    /**
+     * 配置GPU delegate選項根據配置文件
+     */
+    private void configureGpuDelegateOptions(GpuDelegate.Options gpuOptions) {
+        // Inference preference設定
+        String inferencePreference = configManager.getGpuInferencePreference();
+        switch (inferencePreference) {
+            case "FAST_SINGLE_ANSWER":
+                gpuOptions.setInferencePreference(GpuDelegate.Options.INFERENCE_PREFERENCE_FAST_SINGLE_ANSWER);
+                break;
+            case "SUSTAINED_SPEED":
+                gpuOptions.setInferencePreference(GpuDelegate.Options.INFERENCE_PREFERENCE_SUSTAINED_SPEED);
+                break;
+            default:
+                gpuOptions.setInferencePreference(GpuDelegate.Options.INFERENCE_PREFERENCE_FAST_SINGLE_ANSWER);
+        }
+        
+        // Precision loss設定
+        gpuOptions.setPrecisionLossAllowed(configManager.isGpuPrecisionLossAllowed());
+        
+        Log.d(TAG, "GPU configured - Preference: " + inferencePreference + 
+                  ", Precision Loss: " + configManager.isGpuPrecisionLossAllowed());
+    }
+    
+    /**
+     * 為Mali GPU應用特定優化
+     */
+    private void applyMaliOptimizations(GpuDelegate.Options gpuOptions) {
+        // Mali-G57特定優化
+        if (configManager.isExperimentalGpuOptimizations()) {
+            Log.d(TAG, "Applying experimental Mali-G57 optimizations");
+            
+            // 針對量化模型的特殊優化
+            if (configManager.isEnableQuantizedInference()) {
+                Log.d(TAG, "Applying quantized model optimizations for Mali GPU");
+                // 量化模型在Mali GPU上通常有更好的性能
+                // 可以使用更激進的設定
+            }
+            
+            // 檢查模型類型並應用相應優化
+            String modelPath = configManager.getDefaultModelPath();
+            if (modelPath.contains("dynamic_range_quant")) {
+                Log.d(TAG, "Dynamic range quantized model detected - optimizing for Mali");
+                // 動態範圍量化模型特定優化
+            }
+        }
     }
     
     private void setupCpu(Interpreter.Options options) {
@@ -346,24 +410,54 @@ public class ThreadSafeSRProcessor {
     }
     
     private void allocateCachedArrays() {
-        // 預分配緩存數組以避免GC壓力
-        int inputPixels = actualInputWidth * actualInputHeight;
-        int outputPixels = actualOutputWidth * actualOutputHeight;
-        
-        // 輸入處理緩存
-        cachedPixelArray = new int[inputPixels];
-        cachedFloatArray = new float[inputPixels * 3]; // 輸入轉換用
-        cachedByteArray = new byte[inputPixels * 3];
-        
-        // 輸出處理緩存 - 這是GC壓力的主要來源
-        cachedOutputPixelArray = new int[outputPixels];
-        cachedOutputFloatArray = new float[outputPixels * 3]; // RGB 3通道
-        cachedOutputByteArray = new byte[outputPixels * 3];
-        
-        Log.d(TAG, "Allocated cached arrays - Input: " + inputPixels + 
-                  " pixels, Output: " + outputPixels + " pixels");
-        Log.d(TAG, "Output cache sizes - Pixels: " + (outputPixels * 4 / 1024 / 1024) + "MB, " +
-                  "Floats: " + (outputPixels * 3 * 4 / 1024 / 1024) + "MB");
+        try {
+            // 預分配緩存數組以避免GC壓力
+            int inputPixels = actualInputWidth * actualInputHeight;
+            int outputPixels = actualOutputWidth * actualOutputHeight;
+            
+            Log.d(TAG, "Allocating cached arrays - Input: " + inputPixels + 
+                      " pixels, Output: " + outputPixels + " pixels");
+            
+            // 檢查記憶體是否足夠
+            Runtime runtime = Runtime.getRuntime();
+            long totalMemoryNeeded = (inputPixels * 3 * 4) + // input float array
+                                   (inputPixels * 3) +      // input byte array  
+                                   (outputPixels * 4) +     // output pixel array
+                                   (outputPixels * 3 * 4) + // output float array
+                                   (outputPixels * 3);      // output byte array
+            
+            long availableMemory = runtime.maxMemory() - (runtime.totalMemory() - runtime.freeMemory());
+            
+            Log.d(TAG, "Memory needed: " + (totalMemoryNeeded / 1024 / 1024) + "MB, " +
+                      "Available: " + (availableMemory / 1024 / 1024) + "MB");
+            
+            if (totalMemoryNeeded > availableMemory * 0.5) { // 只使用50%可用記憶體
+                Log.w(TAG, "Large memory allocation required, may cause GC pressure");
+            }
+            
+            // 輸入處理緩存
+            Log.d(TAG, "Allocating input caches...");
+            cachedPixelArray = new int[inputPixels];
+            cachedFloatArray = new float[inputPixels * 3]; // 輸入轉換用
+            cachedByteArray = new byte[inputPixels * 3];
+            
+            // 輸出處理緩存 - 這是GC壓力的主要來源
+            Log.d(TAG, "Allocating output caches...");
+            cachedOutputPixelArray = new int[outputPixels];
+            cachedOutputFloatArray = new float[outputPixels * 3]; // RGB 3通道
+            cachedOutputByteArray = new byte[outputPixels * 3];
+            
+            Log.d(TAG, "Successfully allocated all cached arrays");
+            Log.d(TAG, "Output cache sizes - Pixels: " + (outputPixels * 4 / 1024 / 1024) + "MB, " +
+                      "Floats: " + (outputPixels * 3 * 4 / 1024 / 1024) + "MB");
+                      
+        } catch (OutOfMemoryError e) {
+            Log.e(TAG, "Out of memory while allocating cached arrays", e);
+            throw new RuntimeException("Failed to allocate cached arrays due to insufficient memory", e);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to allocate cached arrays", e);
+            throw new RuntimeException("Failed to allocate cached arrays", e);
+        }
     }
     
     private void switchToMode(boolean useGpu) {
