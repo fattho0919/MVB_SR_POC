@@ -160,8 +160,16 @@ public class MainActivity extends AppCompatActivity {
                 Bitmap resultBitmap;
                 
                 // 檢查是否啟用分塊處理
-                boolean shouldUseTiling = cbEnableTiling.isChecked() && 
-                                        TileProcessor.shouldUseTileProcessing(currentBitmap, configManager);
+                boolean shouldUseTiling;
+                if (cbEnableTiling.isChecked()) {
+                    // 如果用戶勾選了 checkbox，強制啟用 tiling（或使用推薦邏輯）
+                    shouldUseTiling = true;
+                    Log.d("MainActivity", "Tiling forced by user selection");
+                } else {
+                    // 否則使用自動判斷邏輯
+                    shouldUseTiling = TileProcessor.shouldUseTileProcessing(currentBitmap, configManager);
+                }
+                
                 if (shouldUseTiling) {
                     Log.d("MainActivity", "Using tile processing for large image");
                     TileProcessor tileProcessor = new TileProcessor(srProcessor, configManager);
@@ -332,8 +340,16 @@ public class MainActivity extends AppCompatActivity {
                 Bitmap resultBitmap;
                 
                 // 檢查是否啟用分塊處理
-                boolean shouldUseTiling = cbEnableTiling.isChecked() && 
-                                        TileProcessor.shouldUseTileProcessing(currentBitmap, configManager);
+                boolean shouldUseTiling;
+                if (cbEnableTiling.isChecked()) {
+                    // 如果用戶勾選了 checkbox，強制啟用 tiling（或使用推薦邏輯）
+                    shouldUseTiling = true;
+                    Log.d("MainActivity", "Tiling forced by user selection");
+                } else {
+                    // 否則使用自動判斷邏輯
+                    shouldUseTiling = TileProcessor.shouldUseTileProcessing(currentBitmap, configManager);
+                }
+                
                 if (shouldUseTiling) {
                     Log.d("MainActivity", "Using tile processing for large image");
                     TileProcessor tileProcessor = new TileProcessor(srProcessor, configManager);

@@ -1,6 +1,6 @@
 {
   "model": {
-    "default_model_path": "models/DSCF_256x256_float32.tflite",
+    "default_model_path": "models/DSCF_float32.tflite",
     "alternative_models": [
       "models/DSCF_256x256_float16.tflite",
       "models/DSCF_256x256_float32.tflite",
@@ -21,7 +21,7 @@
     "gpu_precision_loss_allowed": true,
     "gpu_wait_type": "PASSIVE",
     "gpu_backend": "OPENCL",
-    "enable_quantized_inference": true,
+    "enable_quantized_inference": false,
     "experimental_gpu_optimizations": true
   },
   "tiling": {
@@ -36,7 +36,7 @@
     "enable_memory_logging": true
   },
   "ui": {
-    "default_tiling_enabled": true,
+    "default_tiling_enabled": false,
     "show_detailed_timing": true,
     "show_memory_stats": true
   },
