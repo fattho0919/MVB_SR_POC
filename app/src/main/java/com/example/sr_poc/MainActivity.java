@@ -2,6 +2,7 @@ package com.example.sr_poc;
 
 import android.graphics.Bitmap;
 import android.os.Bundle;
+import android.view.View;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.ImageView;
@@ -14,6 +15,7 @@ import androidx.appcompat.app.AppCompatActivity;
 public class MainActivity extends AppCompatActivity {
     
     private ImageView imageView;
+    private ImageComparisonView imageComparisonView;
     private Button btnSwitchImage;
     private Button btnGpuProcess;
     private Button btnCpuProcess;
@@ -26,6 +28,7 @@ public class MainActivity extends AppCompatActivity {
     private ThreadSafeSRProcessor srProcessor;
     private ConfigManager configManager;
     private Bitmap originalBitmap;
+    private Bitmap processedBitmap;
     
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -40,6 +43,7 @@ public class MainActivity extends AppCompatActivity {
     
     private void initViews() {
         imageView = findViewById(R.id.imageView);
+        imageComparisonView = findViewById(R.id.imageComparisonView);
         btnSwitchImage = findViewById(R.id.btnSwitchImage);
         btnGpuProcess = findViewById(R.id.btnGpuProcess);
         btnCpuProcess = findViewById(R.id.btnCpuProcess);
@@ -246,7 +250,13 @@ public class MainActivity extends AppCompatActivity {
                     if (resultBitmap != null) {
                         Log.d("MainActivity", "Result bitmap size: " + 
                             resultBitmap.getWidth() + "x" + resultBitmap.getHeight());
-                        imageView.setImageBitmap(resultBitmap);
+                        
+                        // 保存處理後的圖片
+                        processedBitmap = resultBitmap;
+                        
+                        // 更新比較視圖
+                        updateComparisonView();
+                        
                         tvInferenceTime.setText(String.format("Inference time: %d ms", stats.inferenceTime));
                     } else {
                         Log.e("MainActivity", "Super resolution returned null");
@@ -427,7 +437,13 @@ public class MainActivity extends AppCompatActivity {
                     if (resultBitmap != null) {
                         Log.d("MainActivity", "Result bitmap size: " + 
                             resultBitmap.getWidth() + "x" + resultBitmap.getHeight());
-                        imageView.setImageBitmap(resultBitmap);
+                        
+                        // 保存處理後的圖片
+                        processedBitmap = resultBitmap;
+                        
+                        // 更新比較視圖
+                        updateComparisonView();
+                        
                         tvInferenceTime.setText(String.format("Inference time (%s): %d ms", 
                                               forceGpu ? "GPU" : "CPU", stats.inferenceTime));
                     } else {
@@ -462,7 +478,14 @@ public class MainActivity extends AppCompatActivity {
     
     private void resetToOriginalImage() {
         if (originalBitmap != null) {
+            // 清除處理後的圖片
+            processedBitmap = null;
+            
+            // 切換回單一圖片顯示模式
+            imageComparisonView.setVisibility(View.GONE);
+            imageView.setVisibility(View.VISIBLE);
             imageView.setImageBitmap(originalBitmap);
+            
             tvInferenceTime.setText("Reset to original");
             Log.d("MainActivity", "Image reset to original");
             Toast.makeText(this, "Image reset to original", Toast.LENGTH_SHORT).show();
@@ -476,13 +499,35 @@ public class MainActivity extends AppCompatActivity {
         if (bitmap != null) {
             // 保存原始圖片的副本
             originalBitmap = bitmap.copy(bitmap.getConfig(), false);
+            
+            // 清除之前的處理結果
+            processedBitmap = null;
+            
+            // 切換回單一圖片顯示模式
+            imageComparisonView.setVisibility(View.GONE);
+            imageView.setVisibility(View.VISIBLE);
             imageView.setImageBitmap(bitmap);
+            
             String imageInfo = String.format("%s (%d/%d)", 
                 imageManager.getCurrentImageName(),
                 imageManager.getCurrentIndex() + 1,
                 imageManager.getTotalImages());
             tvImageInfo.setText(imageInfo);
             tvInferenceTime.setText("Ready");
+        }
+    }
+    
+    private void updateComparisonView() {
+        if (originalBitmap != null && processedBitmap != null) {
+            // 切換到比較模式
+            imageView.setVisibility(View.GONE);
+            imageComparisonView.setVisibility(View.VISIBLE);
+            
+            // 設置比較圖片
+            imageComparisonView.setOriginalBitmap(originalBitmap);
+            imageComparisonView.setProcessedBitmap(processedBitmap);
+            
+            Log.d("MainActivity", "Switched to comparison view");
         }
     }
     
@@ -498,6 +543,13 @@ public class MainActivity extends AppCompatActivity {
             if (currentBitmap != null && !currentBitmap.isRecycled()) {
                 currentBitmap.recycle();
             }
+        }
+        // 釋放比較視圖中的圖片
+        if (originalBitmap != null && !originalBitmap.isRecycled()) {
+            originalBitmap.recycle();
+        }
+        if (processedBitmap != null && !processedBitmap.isRecycled()) {
+            processedBitmap.recycle();
         }
         // GC移除以避免性能暫停
     }

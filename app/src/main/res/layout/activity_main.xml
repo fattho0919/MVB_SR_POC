@@ -5,10 +5,18 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="16dp"
+    android:padding="8dp"
     tools:context=".MainActivity">
 
-    <!-- Image Display Area -->
+    <!-- Image Comparison Area -->
+    <com.example.sr_poc.ImageComparisonView
+        android:id="@+id/imageComparisonView"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="@android:color/black" />
+
+    <!-- Fallback ImageView (hidden by default) -->
     <ImageView
         android:id="@+id/imageView"
         android:layout_width="match_parent"
@@ -16,121 +24,117 @@
         android:layout_weight="1"
         android:scaleType="fitCenter"
         android:background="@android:color/black"
-        android:contentDescription="@string/image_display" />
+        android:contentDescription="@string/image_display"
+        android:visibility="gone" />
 
-    <!-- Image Info Text -->
-    <TextView
-        android:id="@+id/tvImageInfo"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:text="@string/image_info_placeholder"
-        android:textAlignment="center"
-        android:textSize="14sp"
-        android:textColor="@android:color/black" />
-
-    <!-- Inference Time Text -->
-    <TextView
-        android:id="@+id/tvInferenceTime"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:text="@string/ready"
-        android:textAlignment="center"
-        android:textSize="16sp"
-        android:textStyle="bold"
-        android:textColor="@color/purple_700" />
-
-    <!-- Button Container -->
+    <!-- Compact Info Row -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
+        android:layout_marginTop="2dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+        
+        <!-- Image Info Text -->
+        <TextView
+            android:id="@+id/tvImageInfo"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/image_info_placeholder"
+            android:textAlignment="textStart"
+            android:textSize="10sp"
+            android:textColor="@android:color/black" />
+
+        <!-- Inference Time Text -->
+        <TextView
+            android:id="@+id/tvInferenceTime"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/ready"
+            android:textAlignment="textEnd"
+            android:textSize="10sp"
+            android:textStyle="bold"
+            android:textColor="@color/purple_700" />
+            
+    </LinearLayout>
+
+    <!-- Button Container - Ultra Compact Design -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
         android:orientation="vertical">
 
-        <!-- First Row - Super Resolution and Switch Image -->
+        <!-- Main Controls Row -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
             android:gravity="center">
-
-            <!-- Super Resolution Button -->
 
             <!-- Switch Image Button -->
             <Button
                 android:id="@+id/btnSwitchImage"
                 android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="4dp"
-                android:layout_marginEnd="4dp"
+                android:layout_height="28dp"
+                android:layout_marginEnd="2dp"
                 android:layout_weight="1"
                 android:background="@color/teal_200"
-                android:padding="10dp"
+                android:padding="2dp"
                 android:text="@string/switch_image"
                 android:textColor="@color/white"
-                android:textSize="16sp" />
-
-            <Button
-                android:id="@+id/btnResetImage"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="4dp"
-                android:layout_marginEnd="4dp"
-                android:layout_weight="1"
-                android:background="@android:color/holo_orange_light"
-                android:padding="10dp"
-                android:text="Reset"
-                android:textColor="@android:color/white"
-                android:textSize="14sp" />
-
-        </LinearLayout>
-
-        <!-- Second Row - GPU, CPU, Reset -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:orientation="horizontal"
-            android:gravity="center">
+                android:textSize="10sp" />
 
             <!-- GPU Processing Button -->
             <Button
                 android:id="@+id/btnGpuProcess"
                 android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="4dp"
-                android:layout_marginEnd="4dp"
+                android:layout_height="28dp"
+                android:layout_marginStart="1dp"
+                android:layout_marginEnd="1dp"
                 android:layout_weight="1"
                 android:background="@android:color/holo_green_light"
-                android:padding="10dp"
-                android:text="GPU"
+                android:padding="2dp"
+                android:text="GPU SR"
                 android:textColor="@android:color/white"
-                android:textSize="14sp" />
+                android:textSize="10sp" />
 
             <!-- CPU Processing Button -->
             <Button
                 android:id="@+id/btnCpuProcess"
                 android:layout_width="0dp"
-                android:layout_height="wrap_content"
+                android:layout_height="28dp"
                 android:layout_weight="1"
-                android:layout_marginStart="4dp"
-                android:layout_marginEnd="4dp"
-                android:text="CPU"
-                android:textSize="14sp"
+                android:layout_marginStart="1dp"
+                android:layout_marginEnd="1dp"
+                android:text="CPU SR"
+                android:textSize="10sp"
                 android:background="@android:color/holo_blue_light"
                 android:textColor="@android:color/white"
-                android:padding="10dp" />
+                android:padding="2dp" />
 
             <!-- Reset Image Button -->
+            <Button
+                android:id="@+id/btnResetImage"
+                android:layout_width="0dp"
+                android:layout_height="28dp"
+                android:layout_marginStart="2dp"
+                android:layout_weight="1"
+                android:background="@android:color/holo_orange_light"
+                android:padding="2dp"
+                android:text="Reset"
+                android:textColor="@android:color/white"
+                android:textSize="10sp" />
 
         </LinearLayout>
 
-        <!-- Third Row - Tiling Option -->
+        <!-- Tiling Option Row -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="2dp"
             android:orientation="horizontal"
             android:gravity="center">
 
@@ -139,8 +143,8 @@
                 android:id="@+id/cbEnableTiling"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Enable Tiling (for large images)"
-                android:textSize="14sp"
+                android:text="Enable Tiling"
+                android:textSize="10sp"
                 android:checked="true" />
 
         </LinearLayout>
