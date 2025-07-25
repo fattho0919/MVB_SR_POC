@@ -541,29 +541,11 @@ public class ThreadSafeSRProcessor {
         
         try {
             if (inputDataType == DataType.FLOAT32) {
-                // 處理float32輸入 - 優化版本，減少日誌開銷
-                
-                for (int pixel : pixels) {
-                    float r = ((pixel >> 16) & 0xFF) / 255.0f;
-                    float g = ((pixel >> 8) & 0xFF) / 255.0f;
-                    float b = (pixel & 0xFF) / 255.0f;
-                    
-                    inputBuffer.getBuffer().putFloat(r);
-                    inputBuffer.getBuffer().putFloat(g);
-                    inputBuffer.getBuffer().putFloat(b);
-                }
+                // 優化的float32輸入處理 - 批量轉換
+                convertPixelsToFloat32Buffer(pixels);
             } else if (inputDataType == DataType.UINT8 || inputDataType == DataType.INT8) {
-                // 處理uint8/int8輸入 - 優化版本
-                
-                for (int pixel : pixels) {
-                    int r = (pixel >> 16) & 0xFF;
-                    int g = (pixel >> 8) & 0xFF;
-                    int b = pixel & 0xFF;
-                    
-                    inputBuffer.getBuffer().put((byte) r);
-                    inputBuffer.getBuffer().put((byte) g);
-                    inputBuffer.getBuffer().put((byte) b);
-                }
+                // 優化的uint8/int8輸入處理 - 批量轉換
+                convertPixelsToUint8Buffer(pixels);
             } else {
                 throw new IllegalArgumentException("Unsupported input data type: " + inputDataType);
             }
@@ -576,6 +558,50 @@ public class ThreadSafeSRProcessor {
                       ", remaining: " + inputBuffer.getBuffer().remaining());
             throw e;
         }
+    }
+    
+    /**
+     * 優化的像素到float32緩衝區轉換
+     */
+    private void convertPixelsToFloat32Buffer(int[] pixels) {
+        // 預分配float數組用於批量寫入
+        int totalFloats = pixels.length * 3;
+        float[] floatData = new float[totalFloats];
+        
+        // 批量轉換像素到float數組
+        for (int i = 0, floatIndex = 0; i < pixels.length; i++, floatIndex += 3) {
+            int pixel = pixels[i];
+            
+            // 使用位運算快速提取RGB並轉換為float
+            floatData[floatIndex] = ((pixel >> 16) & 0xFF) * 0.003921569f; // / 255.0f的優化版本
+            floatData[floatIndex + 1] = ((pixel >> 8) & 0xFF) * 0.003921569f;
+            floatData[floatIndex + 2] = (pixel & 0xFF) * 0.003921569f;
+        }
+        
+        // 批量寫入到buffer
+        inputBuffer.getBuffer().asFloatBuffer().put(floatData);
+    }
+    
+    /**
+     * 優化的像素到uint8緩衝區轉換
+     */
+    private void convertPixelsToUint8Buffer(int[] pixels) {
+        // 預分配byte數組用於批量寫入
+        int totalBytes = pixels.length * 3;
+        byte[] byteData = new byte[totalBytes];
+        
+        // 批量轉換像素到byte數組
+        for (int i = 0, byteIndex = 0; i < pixels.length; i++, byteIndex += 3) {
+            int pixel = pixels[i];
+            
+            // 使用位運算快速提取RGB
+            byteData[byteIndex] = (byte) ((pixel >> 16) & 0xFF);
+            byteData[byteIndex + 1] = (byte) ((pixel >> 8) & 0xFF);
+            byteData[byteIndex + 2] = (byte) (pixel & 0xFF);
+        }
+        
+        // 批量寫入到buffer
+        inputBuffer.getBuffer().put(byteData);
     }
     
     private Bitmap convertOutputToBitmap() {
