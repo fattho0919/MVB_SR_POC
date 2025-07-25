@@ -51,6 +51,10 @@ public class MainActivity extends AppCompatActivity {
         cbEnableTiling = findViewById(R.id.cbEnableTiling);
         tvInferenceTime = findViewById(R.id.tvInferenceTime);
         tvImageInfo = findViewById(R.id.tvImageInfo);
+        
+        // 初始化時禁用所有按鈕並顯示 initing 狀態
+        setButtonsEnabled(false);
+        tvInferenceTime.setText("Initing...");
     }
     
     private void initComponents() {
@@ -68,7 +72,6 @@ public class MainActivity extends AppCompatActivity {
         srProcessor = new ThreadSafeSRProcessor(this);
         
         // 異步初始化SR處理器
-        tvInferenceTime.setText("Initializing...");
         srProcessor.initialize(new ThreadSafeSRProcessor.InitCallback() {
             @Override
             public void onInitialized(boolean success, String message) {
@@ -77,10 +80,13 @@ public class MainActivity extends AppCompatActivity {
                         Log.d("MainActivity", "SR Processor: " + message);
                         Toast.makeText(MainActivity.this, message, Toast.LENGTH_LONG).show();
                         tvInferenceTime.setText("Ready");
+                        // 初始化成功後啟用所有按鈕
+                        setButtonsEnabled(true);
                     } else {
                         Log.e("MainActivity", "SR Processor failed: " + message);
                         Toast.makeText(MainActivity.this, "Failed to initialize: " + message, Toast.LENGTH_LONG).show();
                         tvInferenceTime.setText("Failed");
+                        // 初始化失敗仍然保持按鈕禁用狀態
                         finish();
                     }
                 });
@@ -529,6 +535,18 @@ public class MainActivity extends AppCompatActivity {
             
             Log.d("MainActivity", "Switched to comparison view");
         }
+    }
+    
+    /**
+     * 統一管理所有按鈕的啟用/禁用狀態
+     * @param enabled true 為啟用按鈕，false 為禁用按鈕
+     */
+    private void setButtonsEnabled(boolean enabled) {
+        btnSwitchImage.setEnabled(enabled);
+        btnGpuProcess.setEnabled(enabled);
+        btnCpuProcess.setEnabled(enabled);
+        btnResetImage.setEnabled(enabled);
+        cbEnableTiling.setEnabled(enabled);
     }
     
     @Override
