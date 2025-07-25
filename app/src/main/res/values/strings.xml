@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">Super Resolution POC</string>
+    <string name="super_resolution">Execute SR</string>
+    <string name="switch_image">Switch Image</string>
+    <string name="image_display">Image Display</string>
+    <string name="image_info_placeholder">Image: Loading...</string>
+    <string name="ready">Ready</string>
+</resources>

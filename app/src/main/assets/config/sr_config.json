@@ -1,0 +1,43 @@
+{
+  "model": {
+    "default_model_path": "models/DSCF_float16.tflite",
+    "alternative_models": [
+      "models/DSCF_256x256_float16.tflite",
+      "models/DSCF_256x256_float32.tflite",
+      "models/DSCF_256x256_dynamic_range_quant.tflite",
+      "models/DSCF_dynamic_range_quant.tflite"
+    ],
+    "expected_scale_factor": 4,
+    "channels": 3
+  },
+  "processing": {
+    "default_num_threads": 4,
+    "use_xnnpack": true,
+    "allow_fp16_precision": true,
+    "use_nnapi": true,
+    "gpu_inference_preference": "FAST_SINGLE_ANSWER",
+    "gpu_precision_loss_allowed": true
+  },
+  "tiling": {
+    "overlap_pixels": 32,
+    "memory_threshold_percentage": 0.6,
+    "max_input_size_without_tiling": 2048,
+    "force_tiling_above_mb": 500
+  },
+  "memory": {
+    "low_memory_warning_mb": 100,
+    "gc_after_inference": false,
+    "enable_memory_logging": true
+  },
+  "ui": {
+    "default_tiling_enabled": true,
+    "show_detailed_timing": true,
+    "show_memory_stats": true
+  },
+  "debugging": {
+    "enable_verbose_logging": false,
+    "log_model_shapes": true,
+    "log_performance_stats": true,
+    "enable_buffer_validation": false
+  }
+}
