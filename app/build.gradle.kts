@@ -37,6 +37,7 @@ dependencies {
     implementation(libs.material)
     implementation("com.google.ai.edge.litert:litert:1.4.0")
     implementation("com.google.ai.edge.litert:litert-gpu:1.4.0")
+    implementation("org.tensorflow:tensorflow-lite:2.17.0")
     implementation("com.google.ai.edge.litert:litert-metadata:1.4.0")
     implementation("com.google.ai.edge.litert:litert-support:1.4.0")
     testImplementation(libs.junit)

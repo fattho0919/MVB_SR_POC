@@ -19,6 +19,7 @@ public class MainActivity extends AppCompatActivity {
     private Button btnSwitchImage;
     private Button btnGpuProcess;
     private Button btnCpuProcess;
+    private Button btnNpuProcess;
     private Button btnResetImage;
     private CheckBox cbEnableTiling;
     private TextView tvInferenceTime;
@@ -47,6 +48,7 @@ public class MainActivity extends AppCompatActivity {
         btnSwitchImage = findViewById(R.id.btnSwitchImage);
         btnGpuProcess = findViewById(R.id.btnGpuProcess);
         btnCpuProcess = findViewById(R.id.btnCpuProcess);
+        btnNpuProcess = findViewById(R.id.btnNpuProcess);
         btnResetImage = findViewById(R.id.btnResetImage);
         cbEnableTiling = findViewById(R.id.cbEnableTiling);
         tvInferenceTime = findViewById(R.id.tvInferenceTime);
@@ -102,6 +104,7 @@ public class MainActivity extends AppCompatActivity {
         btnSwitchImage.setOnClickListener(v -> switchToNextImage());
         btnGpuProcess.setOnClickListener(v -> performSuperResolutionWithGpu());
         btnCpuProcess.setOnClickListener(v -> performSuperResolutionWithCpu());
+        btnNpuProcess.setOnClickListener(v -> performSuperResolutionWithNpu());
         btnResetImage.setOnClickListener(v -> resetToOriginalImage());
         
         // 長按checkbox顯示配置摘要
@@ -294,14 +297,18 @@ public class MainActivity extends AppCompatActivity {
     }
     
     private void performSuperResolutionWithGpu() {
-        performSuperResolutionWithMode(true);
+        performSuperResolutionWithMode(ThreadSafeSRProcessor.ProcessingMode.GPU);
     }
     
     private void performSuperResolutionWithCpu() {
-        performSuperResolutionWithMode(false);
+        performSuperResolutionWithMode(ThreadSafeSRProcessor.ProcessingMode.CPU);
     }
     
-    private void performSuperResolutionWithMode(boolean forceGpu) {
+    private void performSuperResolutionWithNpu() {
+        performSuperResolutionWithMode(ThreadSafeSRProcessor.ProcessingMode.NPU);
+    }
+    
+    private void performSuperResolutionWithMode(ThreadSafeSRProcessor.ProcessingMode processingMode) {
         // 檢查可用記憶體是否足夠
         Runtime runtime = Runtime.getRuntime();
         long freeMemory = runtime.freeMemory();
@@ -318,11 +325,14 @@ public class MainActivity extends AppCompatActivity {
         
         btnGpuProcess.setEnabled(false);
         btnCpuProcess.setEnabled(false);
-        tvInferenceTime.setText("Processing with " + (forceGpu ? "GPU" : "CPU") + "...");
+        btnNpuProcess.setEnabled(false);
+        
+        String modeText = processingMode.name();
+        tvInferenceTime.setText("Processing with " + modeText + "...");
         
         new Thread(() -> {
             try {
-                Log.d("MainActivity", "Starting super resolution task with " + (forceGpu ? "GPU" : "CPU"));
+                Log.d("MainActivity", "Starting super resolution task with " + processingMode.name());
                 
                 Bitmap currentBitmap = imageManager.getCurrentBitmap();
                 if (currentBitmap == null) {
@@ -331,6 +341,7 @@ public class MainActivity extends AppCompatActivity {
                         Toast.makeText(this, "No image loaded", Toast.LENGTH_SHORT).show();
                         btnGpuProcess.setEnabled(true);
                         btnCpuProcess.setEnabled(true);
+                        btnNpuProcess.setEnabled(true);
                         tvInferenceTime.setText("Ready");
                     });
                     return;
@@ -343,7 +354,7 @@ public class MainActivity extends AppCompatActivity {
                 PerformanceMonitor.InferenceStats stats = PerformanceMonitor.createStats();
                 stats.inputWidth = currentBitmap.getWidth();
                 stats.inputHeight = currentBitmap.getHeight();
-                stats.accelerator = forceGpu ? "GPU (Forced)" : "CPU (Forced)";
+                stats.accelerator = processingMode.name() + " (Forced)";
                 
                 // 檢查記憶體
                 long freeMemoryBeforeSR = runtime.freeMemory();
@@ -373,7 +384,7 @@ public class MainActivity extends AppCompatActivity {
                         @Override
                         public void onProgress(int completed, int total) {
                             runOnUiThread(() -> {
-                                tvInferenceTime.setText("Processing with " + (forceGpu ? "GPU" : "CPU") + 
+                                tvInferenceTime.setText("Processing with " + processingMode.name() + 
                                                       " - tiles: " + completed + "/" + total);
                             });
                         }
@@ -386,7 +397,7 @@ public class MainActivity extends AppCompatActivity {
                     final Bitmap[] result = new Bitmap[1];
                     final boolean[] completed = new boolean[1];
                     
-                    srProcessor.processImageWithMode(currentBitmap, forceGpu, new ThreadSafeSRProcessor.InferenceCallback() {
+                    srProcessor.processImageWithMode(currentBitmap, processingMode, new ThreadSafeSRProcessor.InferenceCallback() {
                         @Override
                         public void onResult(Bitmap resultImage, long inferenceTime) {
                             synchronized (lock) {
@@ -451,7 +462,7 @@ public class MainActivity extends AppCompatActivity {
                         updateComparisonView();
                         
                         tvInferenceTime.setText(String.format("Inference time (%s): %d ms", 
-                                              forceGpu ? "GPU" : "CPU", stats.inferenceTime));
+                                              processingMode.name(), stats.inferenceTime));
                     } else {
                         Log.e("MainActivity", "Super resolution returned null");
                         Toast.makeText(this, "Super resolution failed", Toast.LENGTH_SHORT).show();
@@ -459,6 +470,7 @@ public class MainActivity extends AppCompatActivity {
                     }
                     btnGpuProcess.setEnabled(true);
                     btnCpuProcess.setEnabled(true);
+                    btnNpuProcess.setEnabled(true);
                 });
                 
             } catch (OutOfMemoryError e) {
@@ -469,6 +481,7 @@ public class MainActivity extends AppCompatActivity {
                     tvInferenceTime.setText("Out of Memory");
                     btnGpuProcess.setEnabled(true);
                     btnCpuProcess.setEnabled(true);
+                    btnNpuProcess.setEnabled(true);
                 });
             } catch (Exception e) {
                 Log.e("MainActivity", "Exception during super resolution", e);
@@ -477,6 +490,7 @@ public class MainActivity extends AppCompatActivity {
                     tvInferenceTime.setText("Error");
                     btnGpuProcess.setEnabled(true);
                     btnCpuProcess.setEnabled(true);
+                    btnNpuProcess.setEnabled(true);
                 });
             }
         }).start();
@@ -545,6 +559,7 @@ public class MainActivity extends AppCompatActivity {
         btnSwitchImage.setEnabled(enabled);
         btnGpuProcess.setEnabled(enabled);
         btnCpuProcess.setEnabled(enabled);
+        btnNpuProcess.setEnabled(enabled);
         btnResetImage.setEnabled(enabled);
         cbEnableTiling.setEnabled(enabled);
     }

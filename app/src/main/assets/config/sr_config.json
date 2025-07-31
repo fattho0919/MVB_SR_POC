@@ -1,6 +1,6 @@
 {
   "model": {
-    "default_model_path": "models/DSCF_float32.tflite",
+    "default_model_path": "models/DSCF_float16.tflite",
     "alternative_models": [
       "models/DSCF_256x256_float16.tflite",
       "models/DSCF_256x256_float32.tflite",
@@ -23,6 +23,12 @@
     "gpu_backend": "OPENCL",
     "enable_quantized_inference": false,
     "experimental_gpu_optimizations": true
+  },
+  "npu": {
+    "enable_npu": true,
+    "allow_fp16_on_npu": true,
+    "npu_accelerator_name": "",
+    "use_npu_for_quantized": true
   },
   "tiling": {
     "overlap_pixels": 32,

@@ -55,6 +55,12 @@ public class ConfigManager {
     private boolean enableQuantizedInference;
     private boolean experimentalGpuOptimizations;
     
+    // NPU optimization parameters
+    private boolean enableNpu;
+    private boolean allowFp16OnNpu;
+    private String npuAcceleratorName;
+    private boolean useNpuForQuantized;
+    
     private ConfigManager(Context context) {
         this.context = context.getApplicationContext();
         loadConfig();
@@ -124,6 +130,21 @@ public class ConfigManager {
         enableQuantizedInference = processingConfig.optBoolean("enable_quantized_inference", false);
         experimentalGpuOptimizations = processingConfig.optBoolean("experimental_gpu_optimizations", true);
         
+        // NPU optimization parameters
+        JSONObject npuConfig = config.optJSONObject("npu");
+        if (npuConfig != null) {
+            enableNpu = npuConfig.optBoolean("enable_npu", true);
+            allowFp16OnNpu = npuConfig.optBoolean("allow_fp16_on_npu", true);
+            npuAcceleratorName = npuConfig.optString("npu_accelerator_name", "");
+            useNpuForQuantized = npuConfig.optBoolean("use_npu_for_quantized", true);
+        } else {
+            // Default NPU values if config section doesn't exist
+            enableNpu = true;
+            allowFp16OnNpu = true;
+            npuAcceleratorName = "";
+            useNpuForQuantized = true;
+        }
+        
         // Tiling configuration
         JSONObject tilingConfig = config.getJSONObject("tiling");
         overlapPixels = tilingConfig.getInt("overlap_pixels");
@@ -183,6 +204,12 @@ public class ConfigManager {
         gpuBackend = "OPENCL";
         enableQuantizedInference = false;
         experimentalGpuOptimizations = true;
+        
+        // NPU optimization defaults
+        enableNpu = true;
+        allowFp16OnNpu = true;
+        npuAcceleratorName = "";
+        useNpuForQuantized = true;
     }
     
     // Getter methods for cached values
@@ -216,6 +243,12 @@ public class ConfigManager {
     public String getGpuBackend() { return gpuBackend; }
     public boolean isEnableQuantizedInference() { return enableQuantizedInference; }
     public boolean isExperimentalGpuOptimizations() { return experimentalGpuOptimizations; }
+    
+    // NPU optimization getters
+    public boolean isEnableNpu() { return enableNpu; }
+    public boolean isAllowFp16OnNpu() { return allowFp16OnNpu; }
+    public String getNpuAcceleratorName() { return npuAcceleratorName; }
+    public boolean isUseNpuForQuantized() { return useNpuForQuantized; }
     
     // Runtime configuration update methods
     public void setDefaultTilingEnabled(boolean enabled) {
@@ -269,6 +302,8 @@ public class ConfigManager {
         summary.append("  GPU Preference: ").append(gpuInferencePreference).append("\n");
         summary.append("  Quantized Inference: ").append(enableQuantizedInference ? "✓" : "✗").append("\n");
         summary.append("  Experimental GPU: ").append(experimentalGpuOptimizations ? "✓" : "✗").append("\n");
+        summary.append("  NPU Enabled: ").append(enableNpu ? "✓" : "✗").append("\n");
+        summary.append("  NPU FP16: ").append(allowFp16OnNpu ? "✓" : "✗").append("\n");
         summary.append("  Tiling Overlap: ").append(overlapPixels).append("px\n");
         summary.append("  Memory Threshold: ").append((int)(memoryThresholdPercentage * 100)).append("%\n");
         summary.append("  Max Size (no tiling): ").append(maxInputSizeWithoutTiling).append("px\n");

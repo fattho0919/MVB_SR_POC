@@ -13,6 +13,7 @@ import org.tensorflow.lite.support.tensorbuffer.TensorBuffer;
 import org.tensorflow.lite.DataType;
 import org.tensorflow.lite.gpu.CompatibilityList;
 import org.tensorflow.lite.gpu.GpuDelegate;
+import org.tensorflow.lite.nnapi.NnApiDelegate;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -25,23 +26,29 @@ public class ThreadSafeSRProcessor {
     
     private static final String TAG = "ThreadSafeSRProcessor";
     
+    public enum ProcessingMode {
+        GPU, CPU, NPU
+    }
+    
     private ConfigManager configManager;
     
     private Context context;
     private HandlerThread srThread;
     private Handler srHandler;
     
-    // 緩存兩種模式的解釋器以避免重新初始化
+    // 緩存三種模式的解釋器以避免重新初始化
     private Interpreter gpuInterpreter;
     private Interpreter cpuInterpreter;
+    private Interpreter npuInterpreter;
     private GpuDelegate gpuDelegate;
+    private NnApiDelegate npuDelegate;
     
     // 共享的buffers
     private TensorBuffer inputBuffer;
     private TensorBuffer outputBuffer;
     
     private boolean isInitialized = false;
-    private boolean isUsingGpu = false;
+    private ProcessingMode currentMode = ProcessingMode.CPU;
     
     // 當前活躍的解釋器
     private Interpreter currentInterpreter;
@@ -90,7 +97,7 @@ public class ThreadSafeSRProcessor {
     public void initialize(InitCallback callback) {
         srHandler.post(() -> {
             try {
-                Log.d(TAG, "Initializing SR processor with dual-mode setup");
+                Log.d(TAG, "Initializing SR processor with tri-mode setup (GPU/CPU/NPU)");
                 long initStartTime = System.currentTimeMillis();
                 
                 String modelPath = configManager.getDefaultModelPath();
@@ -104,18 +111,25 @@ public class ThreadSafeSRProcessor {
                 // 初始化CPU解釋器  
                 boolean cpuSuccess = initializeCpuInterpreter(tfliteModel);
                 
-                if (!gpuSuccess && !cpuSuccess) {
-                    throw new RuntimeException("Failed to initialize both GPU and CPU interpreters");
+                // 初始化NPU解釋器
+                boolean npuSuccess = initializeNpuInterpreter(tfliteModel);
+                
+                if (!gpuSuccess && !cpuSuccess && !npuSuccess) {
+                    throw new RuntimeException("Failed to initialize all interpreters (GPU, CPU, NPU)");
                 }
                 
-                // 默認使用GPU（如果可用），否則使用CPU
-                if (gpuSuccess) {
+                // 默認優先級: NPU -> GPU -> CPU
+                if (npuSuccess && configManager.isEnableNpu()) {
+                    currentInterpreter = npuInterpreter;
+                    currentMode = ProcessingMode.NPU;
+                    Log.d(TAG, "Default mode: NPU");
+                } else if (gpuSuccess) {
                     currentInterpreter = gpuInterpreter;
-                    isUsingGpu = true;
+                    currentMode = ProcessingMode.GPU;
                     Log.d(TAG, "Default mode: GPU + NNAPI");
                 } else {
                     currentInterpreter = cpuInterpreter;
-                    isUsingGpu = false;
+                    currentMode = ProcessingMode.CPU;
                     Log.d(TAG, "Default mode: NNAPI/CPU");
                 }
                 
@@ -130,8 +144,8 @@ public class ThreadSafeSRProcessor {
                 isInitialized = true;
                 
                 long initTime = System.currentTimeMillis() - initStartTime;
-                String message = String.format("Initialized both modes in %dms. GPU: %s, CPU: %s", 
-                    initTime, gpuSuccess ? "✓" : "✗", cpuSuccess ? "✓" : "✗");
+                String message = String.format("Initialized tri-mode in %dms. GPU: %s, CPU: %s, NPU: %s", 
+                    initTime, gpuSuccess ? "✓" : "✗", cpuSuccess ? "✓" : "✗", npuSuccess ? "✓" : "✗");
                 Log.d(TAG, message);
                 callback.onInitialized(true, message);
                 
@@ -150,10 +164,10 @@ public class ThreadSafeSRProcessor {
             Log.d(TAG, "Model path: " + configManager.getDefaultModelPath());
             
             Interpreter.Options gpuOptions = new Interpreter.Options();
-            if (configManager.isUseNnapi()) {
-                gpuOptions.setUseNNAPI(true);
-                Log.d(TAG, "NNAPI enabled for GPU interpreter");
-            }
+//            if (configManager.isUseNnapi()) {
+//                gpuOptions.setUseNNAPI(true);
+//                Log.d(TAG, "NNAPI enabled for GPU interpreter");
+//            }
             
             if (trySetupGpu(gpuOptions)) {
                 Log.d(TAG, "GPU setup successful, creating interpreter...");
@@ -241,6 +255,142 @@ public class ThreadSafeSRProcessor {
             Log.e(TAG, "Failed to create CPU interpreter: " + e.getMessage(), e);
             return false;
         }
+    }
+    
+    private boolean initializeNpuInterpreter(ByteBuffer tfliteModel) {
+        try {
+            if (!configManager.isEnableNpu()) {
+                Log.d(TAG, "NPU disabled in configuration");
+                return false;
+            }
+            
+            Log.d(TAG, "=== NPU Interpreter Initialization ===");
+            Interpreter.Options npuOptions = new Interpreter.Options();
+            
+            if (trySetupNpu(npuOptions)) {
+                Log.d(TAG, "NPU setup successful, creating interpreter...");
+                try {
+                    Log.d(TAG, "About to create NPU interpreter...");
+                    npuInterpreter = new Interpreter(tfliteModel, npuOptions);
+                    Log.d(TAG, "NPU interpreter created successfully");
+                    
+                    // 檢查模型輸入輸出格式
+                    Log.d(TAG, "Reading NPU model tensors...");
+                    int[] inputShape = npuInterpreter.getInputTensor(0).shape();
+                    int[] outputShape = npuInterpreter.getOutputTensor(0).shape();
+                    DataType inputDataType = npuInterpreter.getInputTensor(0).dataType();
+                    DataType outputDataType = npuInterpreter.getOutputTensor(0).dataType();
+                    
+                    Log.d(TAG, "NPU Model input shape: " + java.util.Arrays.toString(inputShape));
+                    Log.d(TAG, "NPU Model output shape: " + java.util.Arrays.toString(outputShape));
+                    Log.d(TAG, "NPU Input data type: " + inputDataType);
+                    Log.d(TAG, "NPU Output data type: " + outputDataType);
+                    
+                    // 如果GPU和CPU都初始化失敗，從NPU interpreter讀取尺寸
+                    if (actualInputWidth == 0) {
+                        Log.d(TAG, "Reading model dimensions from NPU interpreter...");
+                        readModelDimensions(npuInterpreter);
+                        Log.d(TAG, "Model dimensions read from NPU interpreter");
+                    }
+                    
+                    Log.d(TAG, "NPU interpreter initialization completed successfully");
+                    return true;
+                } catch (Exception e) {
+                    Log.e(TAG, "Failed to create NPU interpreter instance: " + e.getMessage(), e);
+                    
+                    // 清理 NPU delegate
+                    if (npuDelegate != null) {
+                        try {
+                            npuDelegate.close();
+                            npuDelegate = null;
+                        } catch (Exception closeEx) {
+                            Log.w(TAG, "Error closing NPU delegate: " + closeEx.getMessage());
+                        }
+                    }
+                }
+            } else {
+                Log.w(TAG, "NPU setup failed, will not be available");
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to create NPU interpreter: " + e.getMessage(), e);
+        }
+        return false;
+    }
+    
+    private boolean trySetupNpu(Interpreter.Options options) {
+        try {
+            Log.d(TAG, "=== NPU Setup ===");
+            Log.d(TAG, "Device: " + android.os.Build.MODEL + " (SoC: " + android.os.Build.SOC_MODEL + ")");
+            
+            // 創建NPU delegate配置
+            NnApiDelegate.Options npuOptions = new NnApiDelegate.Options();
+            
+            // 應用配置文件中的NPU設定
+            configureNpuDelegateOptions(npuOptions);
+            
+            Log.d(TAG, "Creating NPU delegate...");
+            npuDelegate = new NnApiDelegate(npuOptions);
+            options.addDelegate(npuDelegate);
+            Log.d(TAG, "NPU delegate configured successfully");
+            return true;
+            
+        } catch (Exception e) {
+            Log.e(TAG, "NPU setup failed: " + e.getMessage(), e);
+        }
+        
+        return false;
+    }
+    
+    /**
+     * 配置NPU delegate選項根據配置文件
+     */
+    private void configureNpuDelegateOptions(NnApiDelegate.Options npuOptions) {
+        String modelPath = configManager.getDefaultModelPath();
+        boolean isFloat16Model = modelPath.contains("float16");
+        
+        Log.d(TAG, "=== NPU Delegate Configuration ===");
+        Log.d(TAG, "Model path: " + modelPath);
+        Log.d(TAG, "Detected model type: " + (isFloat16Model ? "Float16" : "Float32/Other"));
+        
+        // 設定加速器名稱（如果指定）
+        String acceleratorName = configManager.getNpuAcceleratorName();
+        if (!acceleratorName.isEmpty()) {
+            npuOptions.setAcceleratorName(acceleratorName);
+            Log.d(TAG, "NPU accelerator name set: " + acceleratorName);
+        } else {
+            Log.d(TAG, "NPU accelerator name: auto-detect");
+        }
+        
+        // 根據模型類型決定FP16設定
+        boolean allowFp16 = configManager.isAllowFp16OnNpu();
+        if (isFloat16Model && allowFp16) {
+            npuOptions.setAllowFp16(true);
+            Log.d(TAG, "NPU FP16 enabled for Float16 model");
+            Log.w(TAG, "WARNING: NNAPI may upconvert Float16 to Float32, causing performance parity");
+        } else if (isFloat16Model && !allowFp16) {
+            npuOptions.setAllowFp16(false);
+            Log.d(TAG, "NPU FP16 disabled - forcing Float32 conversion for Float16 model");
+        } else {
+            npuOptions.setAllowFp16(allowFp16);
+            Log.d(TAG, "NPU FP16 setting: " + allowFp16 + " (non-Float16 model)");
+        }
+        
+        // 量化模型優化
+        if (configManager.isUseNpuForQuantized()) {
+            Log.d(TAG, "NPU configured for quantized model optimization");
+        }
+        
+        // MediaTek MT8195特殊診斷
+        if (HardwareInfo.isMT8195()) {
+            Log.d(TAG, "MediaTek MT8195 NPU Diagnostics:");
+            Log.d(TAG, "  - APU 3.0 should support native Float16");
+            Log.d(TAG, "  - NNAPI delegation may cause precision conversion");
+            Log.d(TAG, "  - Consider testing with setAllowFp16(false) for true Float32 processing");
+        }
+        
+        Log.d(TAG, "Final NPU config - FP16 allowed: " + allowFp16 + 
+                  ", Accelerator: " + (acceleratorName.isEmpty() ? "auto" : acceleratorName) +
+                  ", Model type: " + (isFloat16Model ? "Float16" : "Float32"));
     }
     
     private void readModelDimensions(Interpreter interpreter) {
@@ -460,18 +610,38 @@ public class ThreadSafeSRProcessor {
         }
     }
     
-    private void switchToMode(boolean useGpu) {
+    private void switchToMode(ProcessingMode mode) {
         // 快速模式切換 - 無需重新初始化!
-        if (useGpu && gpuInterpreter != null) {
-            currentInterpreter = gpuInterpreter;
-            isUsingGpu = true;
-            Log.d(TAG, "Switched to GPU mode (instant)");
-        } else if (!useGpu && cpuInterpreter != null) {
-            currentInterpreter = cpuInterpreter;
-            isUsingGpu = false;
-            Log.d(TAG, "Switched to CPU mode (instant)");
-        } else {
-            Log.w(TAG, "Requested interpreter not available, keeping current mode");
+        switch (mode) {
+            case GPU:
+                if (gpuInterpreter != null) {
+                    currentInterpreter = gpuInterpreter;
+                    currentMode = ProcessingMode.GPU;
+                    Log.d(TAG, "Switched to GPU mode (instant)");
+                } else {
+                    Log.w(TAG, "GPU interpreter not available, keeping current mode");
+                }
+                break;
+            case CPU:
+                if (cpuInterpreter != null) {
+                    currentInterpreter = cpuInterpreter;
+                    currentMode = ProcessingMode.CPU;
+                    Log.d(TAG, "Switched to CPU mode (instant)");
+                } else {
+                    Log.w(TAG, "CPU interpreter not available, keeping current mode");
+                }
+                break;
+            case NPU:
+                if (npuInterpreter != null) {
+                    currentInterpreter = npuInterpreter;
+                    currentMode = ProcessingMode.NPU;
+                    Log.d(TAG, "Switched to NPU mode (instant)");
+                } else {
+                    Log.w(TAG, "NPU interpreter not available, keeping current mode");
+                }
+                break;
+            default:
+                Log.w(TAG, "Unknown processing mode, keeping current mode");
         }
     }
     
@@ -547,7 +717,19 @@ public class ThreadSafeSRProcessor {
         processImageWithMode(inputBitmap, null, callback);
     }
     
-    public void processImageWithMode(Bitmap inputBitmap, Boolean forceGpu, InferenceCallback callback) {
+    public void processImageWithGpu(Bitmap inputBitmap, InferenceCallback callback) {
+        processImageWithMode(inputBitmap, ProcessingMode.GPU, callback);
+    }
+    
+    public void processImageWithCpu(Bitmap inputBitmap, InferenceCallback callback) {
+        processImageWithMode(inputBitmap, ProcessingMode.CPU, callback);
+    }
+    
+    public void processImageWithNpu(Bitmap inputBitmap, InferenceCallback callback) {
+        processImageWithMode(inputBitmap, ProcessingMode.NPU, callback);
+    }
+    
+    public void processImageWithMode(Bitmap inputBitmap, ProcessingMode forceMode, InferenceCallback callback) {
         if (!isInitialized) {
             callback.onError("Processor not initialized");
             return;
@@ -558,9 +740,9 @@ public class ThreadSafeSRProcessor {
                 Log.d(TAG, "Processing image: " + inputBitmap.getWidth() + "x" + inputBitmap.getHeight());
                 
                 // 快速模式切換 - 無延遲!
-                if (forceGpu != null && forceGpu != isUsingGpu) {
+                if (forceMode != null && forceMode != currentMode) {
                     long switchStart = System.currentTimeMillis();
-                    switchToMode(forceGpu);
+                    switchToMode(forceMode);
                     long switchTime = System.currentTimeMillis() - switchStart;
                     Log.d(TAG, "Mode switch completed in " + switchTime + "ms");
                 }
@@ -593,7 +775,7 @@ public class ThreadSafeSRProcessor {
                 Log.d(TAG, "Setup times - Buffer: " + bufferTime + "ms, Conversion: " + conversionTime + "ms");
                 
                 // 執行推理
-                String accelerator = isUsingGpu ? "GPU + NNAPI" : "NNAPI/CPU";
+                String accelerator = getAcceleratorInfo();
                 Log.d(TAG, "Running inference on " + accelerator);
                 
                 // 減少不必要的日誌以提高性能
@@ -606,9 +788,36 @@ public class ThreadSafeSRProcessor {
                 
                 try {
                     long inferenceStart = System.currentTimeMillis();
+                    
+                    // NPU性能診斷
+                    if (currentMode == ProcessingMode.NPU) {
+                        String modelPath = configManager.getDefaultModelPath();
+                        boolean isFloat16Model = modelPath.contains("float16");
+                        boolean allowFp16 = configManager.isAllowFp16OnNpu();
+                        
+                        Log.d(TAG, "=== NPU Inference Diagnostics ===");
+                        Log.d(TAG, "Model: " + modelPath + " (" + (isFloat16Model ? "Float16" : "Float32") + ")");
+                        Log.d(TAG, "NPU allow_fp16: " + allowFp16);
+                        Log.d(TAG, "Expected behavior: " + 
+                              (isFloat16Model && allowFp16 ? "Native Float16 (or upconvert to Float32)" : 
+                               isFloat16Model && !allowFp16 ? "Force Float32 processing" :
+                               "Native Float32"));
+                    }
+                    
                     currentInterpreter.run(inputBuffer.getBuffer(), outputBuffer.getBuffer());
                     long pureInferenceTime = System.currentTimeMillis() - inferenceStart;
-                    Log.d(TAG, "Pure inference time: " + pureInferenceTime + "ms");
+                    
+                    // NPU性能分析
+                    if (currentMode == ProcessingMode.NPU) {
+                        Log.d(TAG, "NPU Pure inference time: " + pureInferenceTime + "ms");
+                        if (HardwareInfo.isMT8195()) {
+                            Log.d(TAG, "MediaTek MT8195 NPU Performance Analysis:");
+                            Log.d(TAG, "  - Inference time: " + pureInferenceTime + "ms");
+                            Log.d(TAG, "  - If Float16/Float32 times are identical, NNAPI may be upconverting");
+                        }
+                    } else {
+                        Log.d(TAG, "Pure inference time: " + pureInferenceTime + "ms");
+                    }
                 } catch (java.nio.BufferOverflowException e) {
                     Log.e(TAG, "BufferOverflowException during inference, attempting to fix", e);
                     
@@ -1137,9 +1346,17 @@ public class ThreadSafeSRProcessor {
                     cpuInterpreter.close();
                     cpuInterpreter = null;
                 }
+                if (npuInterpreter != null) {
+                    npuInterpreter.close();
+                    npuInterpreter = null;
+                }
                 if (gpuDelegate != null) {
                     gpuDelegate.close();
                     gpuDelegate = null;
+                }
+                if (npuDelegate != null) {
+                    npuDelegate.close();
+                    npuDelegate = null;
                 }
                 currentInterpreter = null;
                 Log.d(TAG, "All resources released");
@@ -1170,11 +1387,27 @@ public class ThreadSafeSRProcessor {
     }
     
     public boolean isUsingGpu() {
-        return isUsingGpu;
+        return currentMode == ProcessingMode.GPU;
+    }
+    
+    public boolean isUsingNpu() {
+        return currentMode == ProcessingMode.NPU;
+    }
+    
+    public ProcessingMode getCurrentMode() {
+        return currentMode;
     }
     
     public String getAcceleratorInfo() {
-        return isUsingGpu ? "GPU + NNAPI (Optimized)" : "NNAPI/CPU (Optimized)";
+        switch (currentMode) {
+            case GPU:
+                return "GPU + NNAPI (Optimized)";
+            case NPU:
+                return "NPU (Neural Processing Unit)";
+            case CPU:
+            default:
+                return "NNAPI/CPU (Optimized)";
+        }
     }
     
     public int getModelInputWidth() {
