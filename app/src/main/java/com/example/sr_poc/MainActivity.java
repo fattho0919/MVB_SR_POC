@@ -12,6 +12,9 @@ import android.util.Log;
 
 import androidx.appcompat.app.AppCompatActivity;
 
+import com.example.sr_poc.processing.ProcessingController;
+import com.example.sr_poc.utils.MemoryUtils;
+
 public class MainActivity extends AppCompatActivity {
     
     private ImageView imageView;
@@ -123,172 +126,7 @@ public class MainActivity extends AppCompatActivity {
     }
     
     private void performSuperResolution() {
-        // 檢查可用記憶體是否足夠
-        Runtime runtime = Runtime.getRuntime();
-        long freeMemory = runtime.freeMemory();
-        long maxMemory = runtime.maxMemory();
-        long usedMemory = runtime.totalMemory() - freeMemory;
-        long availableMemory = maxMemory - usedMemory;
-        
-        // 如果可用記憶體少於100MB，警告用戶
-        if (availableMemory < 100 * 1024 * 1024) {
-            Toast.makeText(this, "Warning: Low memory (" + (availableMemory / 1024 / 1024) + "MB available)", 
-                         Toast.LENGTH_LONG).show();
-            // GC移除以避免性能暫停
-        }
-        
-        tvInferenceTime.setText("Processing...");
-        
-        new Thread(() -> {
-            try {
-                Log.d("MainActivity", "Starting super resolution task");
-                
-                Bitmap currentBitmap = imageManager.getCurrentBitmap();
-                if (currentBitmap == null) {
-                    Log.e("MainActivity", "No current bitmap available");
-                    runOnUiThread(() -> {
-                        Toast.makeText(this, "No image loaded", Toast.LENGTH_SHORT).show();
-                        tvInferenceTime.setText("Ready");
-                    });
-                    return;
-                }
-                
-                Log.d("MainActivity", "Current bitmap size: " + 
-                    currentBitmap.getWidth() + "x" + currentBitmap.getHeight());
-                
-                // 創建效能統計
-                PerformanceMonitor.InferenceStats stats = PerformanceMonitor.createStats();
-                stats.inputWidth = currentBitmap.getWidth();
-                stats.inputHeight = currentBitmap.getHeight();
-                stats.accelerator = srProcessor.getAcceleratorInfo();
-                
-                // 檢查記憶體
-                long freeMemoryBeforeSR = runtime.freeMemory();
-                long maxMemoryBeforeSR = runtime.maxMemory();
-                stats.memoryBefore = (maxMemoryBeforeSR - freeMemoryBeforeSR) / 1024 / 1024;
-                Log.d("MainActivity", "Memory before SR - Free: " + 
-                    (freeMemoryBeforeSR / 1024 / 1024) + "MB, Max: " + (maxMemoryBeforeSR / 1024 / 1024) + "MB");
-                
-                long startTime = System.currentTimeMillis();
-                Bitmap resultBitmap;
-                
-                // 檢查是否啟用分塊處理
-                boolean shouldUseTiling;
-                if (cbEnableTiling.isChecked()) {
-                    // 如果用戶勾選了 checkbox，強制啟用 tiling（或使用推薦邏輯）
-                    shouldUseTiling = true;
-                    Log.d("MainActivity", "Tiling forced by user selection");
-                } else {
-                    // 否則使用自動判斷邏輯
-                    shouldUseTiling = TileProcessor.shouldUseTileProcessing(currentBitmap, configManager);
-                }
-                
-                if (shouldUseTiling) {
-                    Log.d("MainActivity", "Using tile processing for large image");
-                    TileProcessor tileProcessor = new TileProcessor(srProcessor, configManager);
-                    resultBitmap = tileProcessor.processByTiles(currentBitmap, new TileProcessor.ProcessCallback() {
-                        @Override
-                        public void onProgress(int completed, int total) {
-                            runOnUiThread(() -> {
-                                tvInferenceTime.setText("Processing tiles: " + completed + "/" + total);
-                            });
-                        }
-                    });
-                    stats.usedTileProcessing = true;
-                } else {
-                    Log.d("MainActivity", "Using direct processing");
-                    
-                    final Object lock = new Object();
-                    final Bitmap[] result = new Bitmap[1];
-                    final boolean[] completed = new boolean[1];
-                    
-                    srProcessor.processImage(currentBitmap, new ThreadSafeSRProcessor.InferenceCallback() {
-                        @Override
-                        public void onResult(Bitmap resultImage, long inferenceTime) {
-                            synchronized (lock) {
-                                result[0] = resultImage;
-                                completed[0] = true;
-                                lock.notify();
-                            }
-                        }
-                        
-                        @Override
-                        public void onError(String error) {
-                            Log.e("MainActivity", "Direct processing failed: " + error);
-                            synchronized (lock) {
-                                result[0] = null;
-                                completed[0] = true;
-                                lock.notify();
-                            }
-                        }
-                    });
-                    
-                    // 等待處理完成
-                    synchronized (lock) {
-                        while (!completed[0]) {
-                            try {
-                                lock.wait();
-                            } catch (InterruptedException e) {
-                                Log.e("MainActivity", "Wait interrupted");
-                                break;
-                            }
-                        }
-                    }
-                    
-                    resultBitmap = result[0];
-                    stats.usedTileProcessing = false;
-                }
-                
-                long endTime = System.currentTimeMillis();
-                
-                // 完成效能統計
-                stats.inferenceTime = endTime - startTime;
-                if (resultBitmap != null) {
-                    stats.outputWidth = resultBitmap.getWidth();
-                    stats.outputHeight = resultBitmap.getHeight();
-                }
-                long freeMemoryAfterSR = runtime.freeMemory();
-                stats.memoryAfter = (maxMemoryBeforeSR - freeMemoryAfterSR) / 1024 / 1024;
-                
-                // 記錄效能統計
-                PerformanceMonitor.logPerformanceStats(stats);
-                
-                Log.d("MainActivity", "Super resolution completed, time: " + stats.inferenceTime + "ms");
-                
-                runOnUiThread(() -> {
-                    if (resultBitmap != null) {
-                        Log.d("MainActivity", "Result bitmap size: " + 
-                            resultBitmap.getWidth() + "x" + resultBitmap.getHeight());
-                        
-                        // 保存處理後的圖片
-                        processedBitmap = resultBitmap;
-                        
-                        // 更新比較視圖
-                        updateComparisonView();
-                        
-                        tvInferenceTime.setText(String.format("Inference time: %d ms", stats.inferenceTime));
-                    } else {
-                        Log.e("MainActivity", "Super resolution returned null");
-                        Toast.makeText(this, "Super resolution failed", Toast.LENGTH_SHORT).show();
-                        tvInferenceTime.setText("Failed");
-                    }
-                });
-                
-            } catch (OutOfMemoryError e) {
-                Log.e("MainActivity", "Out of memory error", e);
-                // GC移除以避免性能暫停
-                runOnUiThread(() -> {
-                    Toast.makeText(this, "Out of memory! Try closing other apps.", Toast.LENGTH_LONG).show();
-                    tvInferenceTime.setText("Out of Memory");
-                });
-            } catch (Exception e) {
-                Log.e("MainActivity", "Exception during super resolution", e);
-                runOnUiThread(() -> {
-                    Toast.makeText(this, "Error: " + e.getClass().getSimpleName(), Toast.LENGTH_LONG).show();
-                    tvInferenceTime.setText("Error");
-                });
-            }
-        }).start();
+        performSuperResolutionWithMode(null);
     }
     
     private void switchToNextImage() {
@@ -309,191 +147,53 @@ public class MainActivity extends AppCompatActivity {
     }
     
     private void performSuperResolutionWithMode(ThreadSafeSRProcessor.ProcessingMode processingMode) {
-        // 檢查可用記憶體是否足夠
-        Runtime runtime = Runtime.getRuntime();
-        long freeMemory = runtime.freeMemory();
-        long maxMemory = runtime.maxMemory();
-        long usedMemory = runtime.totalMemory() - freeMemory;
-        long availableMemory = maxMemory - usedMemory;
-        
-        // 如果可用記憶體少於100MB，警告用戶
-        if (availableMemory < 100 * 1024 * 1024) {
-            Toast.makeText(this, "Warning: Low memory (" + (availableMemory / 1024 / 1024) + "MB available)", 
+        // Show memory warning if needed
+        if (MemoryUtils.isLowMemory()) {
+            MemoryUtils.MemoryInfo memInfo = MemoryUtils.getCurrentMemoryInfo();
+            Toast.makeText(this, "Warning: Low memory (" + memInfo.availableMemoryMB + "MB available)", 
                          Toast.LENGTH_LONG).show();
-            // GC移除以避免性能暫停
         }
         
-        btnGpuProcess.setEnabled(false);
-        btnCpuProcess.setEnabled(false);
-        btnNpuProcess.setEnabled(false);
+        // Disable buttons during processing
+        setProcessingButtonsEnabled(false);
         
-        String modeText = processingMode.name();
-        tvInferenceTime.setText("Processing with " + modeText + "...");
-        
-        new Thread(() -> {
-            try {
-                Log.d("MainActivity", "Starting super resolution task with " + processingMode.name());
-                
-                Bitmap currentBitmap = imageManager.getCurrentBitmap();
-                if (currentBitmap == null) {
-                    Log.e("MainActivity", "No current bitmap available");
-                    runOnUiThread(() -> {
-                        Toast.makeText(this, "No image loaded", Toast.LENGTH_SHORT).show();
-                        btnGpuProcess.setEnabled(true);
-                        btnCpuProcess.setEnabled(true);
-                        btnNpuProcess.setEnabled(true);
-                        tvInferenceTime.setText("Ready");
-                    });
-                    return;
-                }
-                
-                Log.d("MainActivity", "Current bitmap size: " + 
-                    currentBitmap.getWidth() + "x" + currentBitmap.getHeight());
-                
-                // 創建效能統計
-                PerformanceMonitor.InferenceStats stats = PerformanceMonitor.createStats();
-                stats.inputWidth = currentBitmap.getWidth();
-                stats.inputHeight = currentBitmap.getHeight();
-                stats.accelerator = processingMode.name() + " (Forced)";
-                
-                // 檢查記憶體
-                long freeMemoryBeforeSR = runtime.freeMemory();
-                long maxMemoryBeforeSR = runtime.maxMemory();
-                stats.memoryBefore = (maxMemoryBeforeSR - freeMemoryBeforeSR) / 1024 / 1024;
-                Log.d("MainActivity", "Memory before SR - Free: " + 
-                    (freeMemoryBeforeSR / 1024 / 1024) + "MB, Max: " + (maxMemoryBeforeSR / 1024 / 1024) + "MB");
-                
-                long startTime = System.currentTimeMillis();
-                Bitmap resultBitmap;
-                
-                // 檢查是否啟用分塊處理
-                boolean shouldUseTiling;
-                if (cbEnableTiling.isChecked()) {
-                    // 如果用戶勾選了 checkbox，強制啟用 tiling（或使用推薦邏輯）
-                    shouldUseTiling = true;
-                    Log.d("MainActivity", "Tiling forced by user selection");
-                } else {
-                    // 否則使用自動判斷邏輯
-                    shouldUseTiling = TileProcessor.shouldUseTileProcessing(currentBitmap, configManager);
-                }
-                
-                if (shouldUseTiling) {
-                    Log.d("MainActivity", "Using tile processing for large image");
-                    TileProcessor tileProcessor = new TileProcessor(srProcessor, configManager);
-                    resultBitmap = tileProcessor.processByTiles(currentBitmap, new TileProcessor.ProcessCallback() {
-                        @Override
-                        public void onProgress(int completed, int total) {
-                            runOnUiThread(() -> {
-                                tvInferenceTime.setText("Processing with " + processingMode.name() + 
-                                                      " - tiles: " + completed + "/" + total);
-                            });
-                        }
-                    });
-                    stats.usedTileProcessing = true;
-                } else {
-                    Log.d("MainActivity", "Using direct processing");
-                    
-                    final Object lock = new Object();
-                    final Bitmap[] result = new Bitmap[1];
-                    final boolean[] completed = new boolean[1];
-                    
-                    srProcessor.processImageWithMode(currentBitmap, processingMode, new ThreadSafeSRProcessor.InferenceCallback() {
-                        @Override
-                        public void onResult(Bitmap resultImage, long inferenceTime) {
-                            synchronized (lock) {
-                                result[0] = resultImage;
-                                completed[0] = true;
-                                lock.notify();
-                            }
-                        }
-                        
-                        @Override
-                        public void onError(String error) {
-                            Log.e("MainActivity", "Direct processing failed: " + error);
-                            synchronized (lock) {
-                                result[0] = null;
-                                completed[0] = true;
-                                lock.notify();
-                            }
-                        }
-                    });
-                    
-                    // 等待處理完成
-                    synchronized (lock) {
-                        while (!completed[0]) {
-                            try {
-                                lock.wait();
-                            } catch (InterruptedException e) {
-                                Log.e("MainActivity", "Wait interrupted");
-                                break;
-                            }
-                        }
-                    }
-                    
-                    resultBitmap = result[0];
-                    stats.usedTileProcessing = false;
-                }
-                
-                long endTime = System.currentTimeMillis();
-                
-                // 完成效能統計
-                stats.inferenceTime = endTime - startTime;
-                if (resultBitmap != null) {
-                    stats.outputWidth = resultBitmap.getWidth();
-                    stats.outputHeight = resultBitmap.getHeight();
-                }
-                long freeMemoryAfterSR = runtime.freeMemory();
-                stats.memoryAfter = (maxMemoryBeforeSR - freeMemoryAfterSR) / 1024 / 1024;
-                
-                // 記錄效能統計
-                PerformanceMonitor.logPerformanceStats(stats);
-                
-                Log.d("MainActivity", "Super resolution completed, time: " + stats.inferenceTime + "ms");
-                
+        ProcessingController controller = new ProcessingController(srProcessor, configManager, imageManager);
+        controller.processImage(processingMode, cbEnableTiling.isChecked(), new ProcessingController.ProcessingCallback() {
+            @Override
+            public void onStart() {
                 runOnUiThread(() -> {
-                    if (resultBitmap != null) {
-                        Log.d("MainActivity", "Result bitmap size: " + 
-                            resultBitmap.getWidth() + "x" + resultBitmap.getHeight());
-                        
-                        // 保存處理後的圖片
-                        processedBitmap = resultBitmap;
-                        
-                        // 更新比較視圖
-                        updateComparisonView();
-                        
-                        tvInferenceTime.setText(String.format("Inference time (%s): %d ms", 
-                                              processingMode.name(), stats.inferenceTime));
-                    } else {
-                        Log.e("MainActivity", "Super resolution returned null");
-                        Toast.makeText(this, "Super resolution failed", Toast.LENGTH_SHORT).show();
-                        tvInferenceTime.setText("Failed");
-                    }
-                    btnGpuProcess.setEnabled(true);
-                    btnCpuProcess.setEnabled(true);
-                    btnNpuProcess.setEnabled(true);
-                });
-                
-            } catch (OutOfMemoryError e) {
-                Log.e("MainActivity", "Out of memory error", e);
-                // GC移除以避免性能暫停
-                runOnUiThread(() -> {
-                    Toast.makeText(this, "Out of memory! Try closing other apps.", Toast.LENGTH_LONG).show();
-                    tvInferenceTime.setText("Out of Memory");
-                    btnGpuProcess.setEnabled(true);
-                    btnCpuProcess.setEnabled(true);
-                    btnNpuProcess.setEnabled(true);
-                });
-            } catch (Exception e) {
-                Log.e("MainActivity", "Exception during super resolution", e);
-                runOnUiThread(() -> {
-                    Toast.makeText(this, "Error: " + e.getClass().getSimpleName(), Toast.LENGTH_LONG).show();
-                    tvInferenceTime.setText("Error");
-                    btnGpuProcess.setEnabled(true);
-                    btnCpuProcess.setEnabled(true);
-                    btnNpuProcess.setEnabled(true);
+                    String modeText = processingMode != null ? processingMode.name() : "auto";
+                    tvInferenceTime.setText("Processing with " + modeText + "...");
                 });
             }
-        }).start();
+            
+            @Override
+            public void onProgress(String message) {
+                runOnUiThread(() -> tvInferenceTime.setText(message));
+            }
+            
+            @Override
+            public void onSuccess(Bitmap resultBitmap, String timeMessage) {
+                runOnUiThread(() -> {
+                    processedBitmap = resultBitmap;
+                    updateComparisonView();
+                    tvInferenceTime.setText(timeMessage);
+                });
+            }
+            
+            @Override
+            public void onError(String error) {
+                runOnUiThread(() -> {
+                    Toast.makeText(MainActivity.this, error, Toast.LENGTH_LONG).show();
+                    tvInferenceTime.setText("Failed");
+                });
+            }
+            
+            @Override
+            public void onComplete() {
+                runOnUiThread(() -> setProcessingButtonsEnabled(true));
+            }
+        });
     }
     
     private void resetToOriginalImage() {
@@ -551,10 +251,6 @@ public class MainActivity extends AppCompatActivity {
         }
     }
     
-    /**
-     * 統一管理所有按鈕的啟用/禁用狀態
-     * @param enabled true 為啟用按鈕，false 為禁用按鈕
-     */
     private void setButtonsEnabled(boolean enabled) {
         btnSwitchImage.setEnabled(enabled);
         btnGpuProcess.setEnabled(enabled);
@@ -564,32 +260,28 @@ public class MainActivity extends AppCompatActivity {
         cbEnableTiling.setEnabled(enabled);
     }
     
+    private void setProcessingButtonsEnabled(boolean enabled) {
+        btnGpuProcess.setEnabled(enabled);
+        btnCpuProcess.setEnabled(enabled);
+        btnNpuProcess.setEnabled(enabled);
+    }
+    
     @Override
     protected void onDestroy() {
         super.onDestroy();
         if (srProcessor != null) {
             srProcessor.close();
         }
-        // 釋放圖片記憶體
+        // Clean up bitmaps
         if (imageManager != null) {
-            Bitmap currentBitmap = imageManager.getCurrentBitmap();
-            if (currentBitmap != null && !currentBitmap.isRecycled()) {
-                currentBitmap.recycle();
-            }
+            MemoryUtils.safeRecycleBitmap(imageManager.getCurrentBitmap());
         }
-        // 釋放比較視圖中的圖片
-        if (originalBitmap != null && !originalBitmap.isRecycled()) {
-            originalBitmap.recycle();
-        }
-        if (processedBitmap != null && !processedBitmap.isRecycled()) {
-            processedBitmap.recycle();
-        }
-        // GC移除以避免性能暫停
+        MemoryUtils.safeRecycleBitmap(originalBitmap);
+        MemoryUtils.safeRecycleBitmap(processedBitmap);
     }
     
     @Override
     protected void onPause() {
         super.onPause();
-        // GC移除以避免性能暫停
     }
 }

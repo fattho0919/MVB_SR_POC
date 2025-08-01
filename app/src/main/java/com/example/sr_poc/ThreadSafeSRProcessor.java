@@ -20,7 +20,10 @@ import java.nio.ByteBuffer;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicReference;
+
+import com.example.sr_poc.utils.BitmapConverter;
+import com.example.sr_poc.utils.Constants;
+import com.example.sr_poc.utils.MemoryUtils;
 
 public class ThreadSafeSRProcessor {
     
@@ -76,10 +79,10 @@ public class ThreadSafeSRProcessor {
         this.context = context;
         this.configManager = ConfigManager.getInstance(context);
         
-        // 初始化並行處理執行器 - 使用CPU核心數
+        // Initialize parallel processing executor
         int cores = Runtime.getRuntime().availableProcessors();
-        conversionExecutor = Executors.newFixedThreadPool(Math.min(cores, 4)); // 最多4個線程
-        Log.d(TAG, "Initialized conversion executor with " + Math.min(cores, 4) + " threads");
+        conversionExecutor = Executors.newFixedThreadPool(Math.min(cores, Constants.MAX_CONVERSION_THREADS));
+        Log.d(TAG, "Initialized conversion executor with " + Math.min(cores, Constants.MAX_CONVERSION_THREADS) + " threads");
         
         initializeThread();
     }
@@ -101,9 +104,8 @@ public class ThreadSafeSRProcessor {
                 long initStartTime = System.currentTimeMillis();
                 
                 String modelPath = configManager.getDefaultModelPath();
-                Log.d(TAG, "Loading model: " + modelPath);
                 ByteBuffer tfliteModel = FileUtil.loadMappedFile(context, modelPath);
-                Log.d(TAG, "Model loaded, size: " + (tfliteModel.capacity() / 1024) + "KB");
+                Log.d(TAG, "Model loaded: " + modelPath + " (" + (tfliteModel.capacity() / 1024) + "KB)");
                 
                 // 初始化GPU解釋器
                 boolean gpuSuccess = initializeGpuInterpreter(tfliteModel);
@@ -133,13 +135,8 @@ public class ThreadSafeSRProcessor {
                     Log.d(TAG, "Default mode: NNAPI/CPU");
                 }
                 
-                Log.d(TAG, "Starting buffer allocation...");
                 allocateBuffers();
-                Log.d(TAG, "Buffer allocation completed");
-                
-                Log.d(TAG, "Starting cached arrays allocation...");
                 allocateCachedArrays();
-                Log.d(TAG, "Cached arrays allocation completed");
                 
                 isInitialized = true;
                 
@@ -159,10 +156,7 @@ public class ThreadSafeSRProcessor {
     
     private boolean initializeGpuInterpreter(ByteBuffer tfliteModel) {
         try {
-            Log.d(TAG, "=== GPU Interpreter Initialization ===");
-            Log.d(TAG, "Model size: " + (tfliteModel.capacity() / 1024) + "KB");
-            Log.d(TAG, "Model path: " + configManager.getDefaultModelPath());
-            
+            Log.d(TAG, "Initializing GPU interpreter");
             Interpreter.Options gpuOptions = new Interpreter.Options();
 //            if (configManager.isUseNnapi()) {
 //                gpuOptions.setUseNNAPI(true);
@@ -170,86 +164,39 @@ public class ThreadSafeSRProcessor {
 //            }
             
             if (trySetupGpu(gpuOptions)) {
-                Log.d(TAG, "GPU setup successful, creating interpreter...");
                 try {
-                    Log.d(TAG, "About to create GPU interpreter...");
                     gpuInterpreter = new Interpreter(tfliteModel, gpuOptions);
                     Log.d(TAG, "GPU interpreter created successfully");
                     
-                    // 檢查模型輸入輸出格式
-                    Log.d(TAG, "Reading model tensors...");
-                    int[] inputShape = gpuInterpreter.getInputTensor(0).shape();
-                    int[] outputShape = gpuInterpreter.getOutputTensor(0).shape();
-                    DataType inputDataType = gpuInterpreter.getInputTensor(0).dataType();
-                    DataType outputDataType = gpuInterpreter.getOutputTensor(0).dataType();
-                    
-                    Log.d(TAG, "GPU Model input shape: " + java.util.Arrays.toString(inputShape));
-                    Log.d(TAG, "GPU Model output shape: " + java.util.Arrays.toString(outputShape));
-                    Log.d(TAG, "GPU Input data type: " + inputDataType);
-                    Log.d(TAG, "GPU Output data type: " + outputDataType);
-                    
-                    // 讀取並驗證模型尺寸
-                    Log.d(TAG, "Reading model dimensions...");
                     readModelDimensions(gpuInterpreter);
-                    Log.d(TAG, "Model dimensions read successfully");
-                    
-                    // 特別檢查 float16 模型在 Mali GPU 上的兼容性
-                    String modelPath = configManager.getDefaultModelPath();
-                    if (modelPath.contains("float16")) {
-                        Log.d(TAG, "Float16 model detected - checking Mali GPU compatibility");
-                        Log.d(TAG, "Mali-G57 should support float16, continuing...");
-                    }
-                    
-                    Log.d(TAG, "GPU interpreter initialization completed successfully");
                     return true;
                 } catch (Exception e) {
-                    Log.e(TAG, "Failed to create GPU interpreter instance: " + e.getMessage(), e);
-                    Log.e(TAG, "This might be a model compatibility issue with Mali GPU");
-                    
-                    // 清理 GPU delegate
+                    Log.e(TAG, "Failed to create GPU interpreter: " + e.getMessage());
                     if (gpuDelegate != null) {
-                        try {
-                            gpuDelegate.close();
-                            gpuDelegate = null;
-                        } catch (Exception closeEx) {
-                            Log.w(TAG, "Error closing GPU delegate: " + closeEx.getMessage());
-                        }
+                        gpuDelegate.close();
+                        gpuDelegate = null;
                     }
                 }
-            } else {
-                Log.w(TAG, "GPU setup failed, will fallback to CPU");
             }
         } catch (Exception e) {
-            Log.e(TAG, "Failed to create GPU interpreter: " + e.getMessage());
-            Log.e(TAG, "GPU interpreter creation exception details: ", e);
+            Log.e(TAG, "GPU interpreter initialization failed: " + e.getMessage());
         }
         return false;
     }
     
     private boolean initializeCpuInterpreter(ByteBuffer tfliteModel) {
         try {
-            Log.d(TAG, "=== CPU Interpreter Initialization ===");
+            Log.d(TAG, "Initializing CPU interpreter");
             Interpreter.Options cpuOptions = new Interpreter.Options();
             if (configManager.isUseNnapi()) {
                 cpuOptions.setUseNNAPI(true);
-                Log.d(TAG, "NNAPI enabled for CPU interpreter");
             }
-            
-            Log.d(TAG, "Setting up CPU options...");
             setupCpu(cpuOptions);
-            
-            Log.d(TAG, "Creating CPU interpreter...");
             cpuInterpreter = new Interpreter(tfliteModel, cpuOptions);
-            Log.d(TAG, "CPU interpreter created successfully");
             
-            // 如果GPU初始化失敗，從CPU interpreter讀取尺寸
             if (actualInputWidth == 0) {
-                Log.d(TAG, "Reading model dimensions from CPU interpreter...");
                 readModelDimensions(cpuInterpreter);
-                Log.d(TAG, "Model dimensions read from CPU interpreter");
             }
-            
-            Log.d(TAG, "CPU interpreter initialization completed successfully");
             return true;
         } catch (Exception e) {
             Log.e(TAG, "Failed to create CPU interpreter: " + e.getMessage(), e);
@@ -260,56 +207,26 @@ public class ThreadSafeSRProcessor {
     private boolean initializeNpuInterpreter(ByteBuffer tfliteModel) {
         try {
             if (!configManager.isEnableNpu()) {
-                Log.d(TAG, "NPU disabled in configuration");
                 return false;
             }
-            
-            Log.d(TAG, "=== NPU Interpreter Initialization ===");
+            Log.d(TAG, "Initializing NPU interpreter");
             Interpreter.Options npuOptions = new Interpreter.Options();
             
             if (trySetupNpu(npuOptions)) {
-                Log.d(TAG, "NPU setup successful, creating interpreter...");
                 try {
-                    Log.d(TAG, "About to create NPU interpreter...");
                     npuInterpreter = new Interpreter(tfliteModel, npuOptions);
-                    Log.d(TAG, "NPU interpreter created successfully");
                     
-                    // 檢查模型輸入輸出格式
-                    Log.d(TAG, "Reading NPU model tensors...");
-                    int[] inputShape = npuInterpreter.getInputTensor(0).shape();
-                    int[] outputShape = npuInterpreter.getOutputTensor(0).shape();
-                    DataType inputDataType = npuInterpreter.getInputTensor(0).dataType();
-                    DataType outputDataType = npuInterpreter.getOutputTensor(0).dataType();
-                    
-                    Log.d(TAG, "NPU Model input shape: " + java.util.Arrays.toString(inputShape));
-                    Log.d(TAG, "NPU Model output shape: " + java.util.Arrays.toString(outputShape));
-                    Log.d(TAG, "NPU Input data type: " + inputDataType);
-                    Log.d(TAG, "NPU Output data type: " + outputDataType);
-                    
-                    // 如果GPU和CPU都初始化失敗，從NPU interpreter讀取尺寸
                     if (actualInputWidth == 0) {
-                        Log.d(TAG, "Reading model dimensions from NPU interpreter...");
                         readModelDimensions(npuInterpreter);
-                        Log.d(TAG, "Model dimensions read from NPU interpreter");
                     }
-                    
-                    Log.d(TAG, "NPU interpreter initialization completed successfully");
                     return true;
                 } catch (Exception e) {
-                    Log.e(TAG, "Failed to create NPU interpreter instance: " + e.getMessage(), e);
-                    
-                    // 清理 NPU delegate
+                    Log.e(TAG, "Failed to create NPU interpreter: " + e.getMessage());
                     if (npuDelegate != null) {
-                        try {
-                            npuDelegate.close();
-                            npuDelegate = null;
-                        } catch (Exception closeEx) {
-                            Log.w(TAG, "Error closing NPU delegate: " + closeEx.getMessage());
-                        }
+                        npuDelegate.close();
+                        npuDelegate = null;
                     }
                 }
-            } else {
-                Log.w(TAG, "NPU setup failed, will not be available");
             }
         } catch (Exception e) {
             Log.e(TAG, "Failed to create NPU interpreter: " + e.getMessage(), e);
@@ -319,19 +236,11 @@ public class ThreadSafeSRProcessor {
     
     private boolean trySetupNpu(Interpreter.Options options) {
         try {
-            Log.d(TAG, "=== NPU Setup ===");
-            Log.d(TAG, "Device: " + android.os.Build.MODEL + " (SoC: " + android.os.Build.SOC_MODEL + ")");
-            
-            // 創建NPU delegate配置
             NnApiDelegate.Options npuOptions = new NnApiDelegate.Options();
-            
-            // 應用配置文件中的NPU設定
             configureNpuDelegateOptions(npuOptions);
-            
-            Log.d(TAG, "Creating NPU delegate...");
             npuDelegate = new NnApiDelegate(npuOptions);
             options.addDelegate(npuDelegate);
-            Log.d(TAG, "NPU delegate configured successfully");
+            Log.d(TAG, "NPU delegate configured");
             return true;
             
         } catch (Exception e) {
@@ -341,56 +250,14 @@ public class ThreadSafeSRProcessor {
         return false;
     }
     
-    /**
-     * 配置NPU delegate選項根據配置文件
-     */
     private void configureNpuDelegateOptions(NnApiDelegate.Options npuOptions) {
-        String modelPath = configManager.getDefaultModelPath();
-        boolean isFloat16Model = modelPath.contains("float16");
-        
-        Log.d(TAG, "=== NPU Delegate Configuration ===");
-        Log.d(TAG, "Model path: " + modelPath);
-        Log.d(TAG, "Detected model type: " + (isFloat16Model ? "Float16" : "Float32/Other"));
-        
-        // 設定加速器名稱（如果指定）
         String acceleratorName = configManager.getNpuAcceleratorName();
         if (!acceleratorName.isEmpty()) {
             npuOptions.setAcceleratorName(acceleratorName);
-            Log.d(TAG, "NPU accelerator name set: " + acceleratorName);
-        } else {
-            Log.d(TAG, "NPU accelerator name: auto-detect");
         }
         
-        // 根據模型類型決定FP16設定
         boolean allowFp16 = configManager.isAllowFp16OnNpu();
-        if (isFloat16Model && allowFp16) {
-            npuOptions.setAllowFp16(true);
-            Log.d(TAG, "NPU FP16 enabled for Float16 model");
-            Log.w(TAG, "WARNING: NNAPI may upconvert Float16 to Float32, causing performance parity");
-        } else if (isFloat16Model && !allowFp16) {
-            npuOptions.setAllowFp16(false);
-            Log.d(TAG, "NPU FP16 disabled - forcing Float32 conversion for Float16 model");
-        } else {
-            npuOptions.setAllowFp16(allowFp16);
-            Log.d(TAG, "NPU FP16 setting: " + allowFp16 + " (non-Float16 model)");
-        }
-        
-        // 量化模型優化
-        if (configManager.isUseNpuForQuantized()) {
-            Log.d(TAG, "NPU configured for quantized model optimization");
-        }
-        
-        // MediaTek MT8195特殊診斷
-        if (HardwareInfo.isMT8195()) {
-            Log.d(TAG, "MediaTek MT8195 NPU Diagnostics:");
-            Log.d(TAG, "  - APU 3.0 should support native Float16");
-            Log.d(TAG, "  - NNAPI delegation may cause precision conversion");
-            Log.d(TAG, "  - Consider testing with setAllowFp16(false) for true Float32 processing");
-        }
-        
-        Log.d(TAG, "Final NPU config - FP16 allowed: " + allowFp16 + 
-                  ", Accelerator: " + (acceleratorName.isEmpty() ? "auto" : acceleratorName) +
-                  ", Model type: " + (isFloat16Model ? "Float16" : "Float32"));
+        npuOptions.setAllowFp16(allowFp16);
     }
     
     private void readModelDimensions(Interpreter interpreter) {
@@ -427,8 +294,8 @@ public class ThreadSafeSRProcessor {
                           ") but got (" + actualOutputWidth + "x" + actualOutputHeight + ")");
             }
             
-            Log.d(TAG, "Model dimensions - Input: " + actualInputWidth + "x" + actualInputHeight + 
-                      ", Output: " + actualOutputWidth + "x" + actualOutputHeight);
+            Log.d(TAG, "Model: " + actualInputWidth + "x" + actualInputHeight + 
+                      " -> " + actualOutputWidth + "x" + actualOutputHeight);
                       
         } catch (Exception e) {
             Log.e(TAG, "Failed to read model dimensions", e);
@@ -438,100 +305,50 @@ public class ThreadSafeSRProcessor {
 
     private boolean trySetupGpu(Interpreter.Options options) {
         try {
-            Log.d(TAG, "=== GPU Setup (Optimized) ===");
-            Log.d(TAG, "Device: " + android.os.Build.MODEL + " (SoC: " + android.os.Build.SOC_MODEL + ")");
-            
-            // 創建優化的GPU delegate配置
             GpuDelegate.Options gpuOptions = new GpuDelegate.Options();
-            
-            // 應用配置文件中的GPU優化設定
             configureGpuDelegateOptions(gpuOptions);
             
-            // 對於 MediaTek MT8195，使用額外優化
             if (android.os.Build.SOC_MODEL != null && android.os.Build.SOC_MODEL.contains("MT8195")) {
-                Log.d(TAG, "MediaTek MT8195 detected - applying Mali-G57 specific optimizations");
                 applyMaliOptimizations(gpuOptions);
             }
             
-            Log.d(TAG, "Creating optimized GPU delegate...");
             gpuDelegate = new GpuDelegate(gpuOptions);
             options.addDelegate(gpuDelegate);
-            Log.d(TAG, "GPU delegate configured successfully with optimizations");
+            Log.d(TAG, "GPU delegate configured");
             return true;
             
         } catch (Exception e) {
-            Log.w(TAG, "Optimized GPU setup failed, trying fallback: " + e.getMessage());
-            
-            // 回退到標準GPU設定
+            Log.w(TAG, "GPU setup failed, trying fallback: " + e.getMessage());
             try {
                 CompatibilityList compatList = new CompatibilityList();
-                boolean isSupported = compatList.isDelegateSupportedOnThisDevice();
-                Log.d(TAG, "GPU delegate supported (fallback): " + isSupported);
-                
-                if (isSupported) {
+                if (compatList.isDelegateSupportedOnThisDevice()) {
                     GpuDelegate.Options fallbackOptions = new GpuDelegate.Options();
                     fallbackOptions.setInferencePreference(GpuDelegate.Options.INFERENCE_PREFERENCE_FAST_SINGLE_ANSWER);
                     fallbackOptions.setPrecisionLossAllowed(true);
-                    
                     gpuDelegate = new GpuDelegate(fallbackOptions);
                     options.addDelegate(gpuDelegate);
-                    Log.d(TAG, "Fallback GPU delegate configured");
                     return true;
                 }
             } catch (Exception fallbackE) {
-                Log.e(TAG, "Both optimized and fallback GPU setup failed", fallbackE);
+                Log.e(TAG, "GPU setup failed", fallbackE);
             }
         }
         
         return false;
     }
     
-    /**
-     * 配置GPU delegate選項根據配置文件
-     */
     private void configureGpuDelegateOptions(GpuDelegate.Options gpuOptions) {
-        // Inference preference設定
         String inferencePreference = configManager.getGpuInferencePreference();
-        switch (inferencePreference) {
-            case "FAST_SINGLE_ANSWER":
-                gpuOptions.setInferencePreference(GpuDelegate.Options.INFERENCE_PREFERENCE_FAST_SINGLE_ANSWER);
-                break;
-            case "SUSTAINED_SPEED":
-                gpuOptions.setInferencePreference(GpuDelegate.Options.INFERENCE_PREFERENCE_SUSTAINED_SPEED);
-                break;
-            default:
-                gpuOptions.setInferencePreference(GpuDelegate.Options.INFERENCE_PREFERENCE_FAST_SINGLE_ANSWER);
+        if ("SUSTAINED_SPEED".equals(inferencePreference)) {
+            gpuOptions.setInferencePreference(GpuDelegate.Options.INFERENCE_PREFERENCE_SUSTAINED_SPEED);
+        } else {
+            gpuOptions.setInferencePreference(GpuDelegate.Options.INFERENCE_PREFERENCE_FAST_SINGLE_ANSWER);
         }
-        
-        // Precision loss設定
         gpuOptions.setPrecisionLossAllowed(configManager.isGpuPrecisionLossAllowed());
-        
-        Log.d(TAG, "GPU configured - Preference: " + inferencePreference + 
-                  ", Precision Loss: " + configManager.isGpuPrecisionLossAllowed());
     }
     
-    /**
-     * 為Mali GPU應用特定優化
-     */
     private void applyMaliOptimizations(GpuDelegate.Options gpuOptions) {
-        // Mali-G57特定優化
-        if (configManager.isExperimentalGpuOptimizations()) {
-            Log.d(TAG, "Applying experimental Mali-G57 optimizations");
-            
-            // 針對量化模型的特殊優化
-            if (configManager.isEnableQuantizedInference()) {
-                Log.d(TAG, "Applying quantized model optimizations for Mali GPU");
-                // 量化模型在Mali GPU上通常有更好的性能
-                // 可以使用更激進的設定
-            }
-            
-            // 檢查模型類型並應用相應優化
-            String modelPath = configManager.getDefaultModelPath();
-            if (modelPath.contains("dynamic_range_quant")) {
-                Log.d(TAG, "Dynamic range quantized model detected - optimizing for Mali");
-                // 動態範圍量化模型特定優化
-            }
-        }
+        // Mali-G57 optimizations (placeholder for future enhancements)
     }
     
     private void setupCpu(Interpreter.Options options) {
@@ -555,58 +372,28 @@ public class ThreadSafeSRProcessor {
     }
     
     private void allocateBuffers() {
-        Log.d(TAG, "Allocating shared buffers for both interpreters");
         ensureBuffersAreCorrectSize();
     }
     
     private void allocateCachedArrays() {
         try {
-            // 預分配緩存數組以避免GC壓力
             int inputPixels = actualInputWidth * actualInputHeight;
             int outputPixels = actualOutputWidth * actualOutputHeight;
             
-            Log.d(TAG, "Allocating cached arrays - Input: " + inputPixels + 
-                      " pixels, Output: " + outputPixels + " pixels");
-            
-            // 檢查記憶體是否足夠
-            Runtime runtime = Runtime.getRuntime();
-            long totalMemoryNeeded = (inputPixels * 3 * 4) + // input float array
-                                   (inputPixels * 3) +      // input byte array  
-                                   (outputPixels * 4) +     // output pixel array
-                                   (outputPixels * 3 * 4) + // output float array
-                                   (outputPixels * 3);      // output byte array
-            
-            long availableMemory = runtime.maxMemory() - (runtime.totalMemory() - runtime.freeMemory());
-            
-            Log.d(TAG, "Memory needed: " + (totalMemoryNeeded / 1024 / 1024) + "MB, " +
-                      "Available: " + (availableMemory / 1024 / 1024) + "MB");
-            
-            if (totalMemoryNeeded > availableMemory * 0.5) { // 只使用50%可用記憶體
-                Log.w(TAG, "Large memory allocation required, may cause GC pressure");
-            }
-            
-            // 輸入處理緩存
-            Log.d(TAG, "Allocating input caches...");
+            // Allocate input processing caches
             cachedPixelArray = new int[inputPixels];
-            cachedFloatArray = new float[inputPixels * 3]; // 輸入轉換用
+            cachedFloatArray = new float[inputPixels * 3];
             cachedByteArray = new byte[inputPixels * 3];
             
-            // 輸出處理緩存 - 這是GC壓力的主要來源
-            Log.d(TAG, "Allocating output caches...");
+            // Allocate output processing caches
             cachedOutputPixelArray = new int[outputPixels];
-            cachedOutputFloatArray = new float[outputPixels * 3]; // RGB 3通道
+            cachedOutputFloatArray = new float[outputPixels * 3];
             cachedOutputByteArray = new byte[outputPixels * 3];
             
-            Log.d(TAG, "Successfully allocated all cached arrays");
-            Log.d(TAG, "Output cache sizes - Pixels: " + (outputPixels * 4 / 1024 / 1024) + "MB, " +
-                      "Floats: " + (outputPixels * 3 * 4 / 1024 / 1024) + "MB");
-                      
+            Log.d(TAG, "Cached arrays allocated - Input: " + inputPixels + ", Output: " + outputPixels + " pixels");
         } catch (OutOfMemoryError e) {
-            Log.e(TAG, "Out of memory while allocating cached arrays", e);
-            throw new RuntimeException("Failed to allocate cached arrays due to insufficient memory", e);
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to allocate cached arrays", e);
-            throw new RuntimeException("Failed to allocate cached arrays", e);
+            Log.e(TAG, "Out of memory allocating cached arrays", e);
+            throw new RuntimeException("Insufficient memory for cached arrays", e);
         }
     }
     
@@ -758,33 +545,14 @@ public class ThreadSafeSRProcessor {
                 
                 long totalStartTime = System.currentTimeMillis();
                 
-                // 確保緩衝區大小正確
-                long bufferStart = System.currentTimeMillis();
                 ensureBuffersAreCorrectSize();
-                long bufferTime = System.currentTimeMillis() - bufferStart;
-                
-                // 轉換輸入
-                long conversionStart = System.currentTimeMillis();
                 convertBitmapToBuffer(resizedInput);
-                long conversionTime = System.currentTimeMillis() - conversionStart;
-                
-                // 重置緩衝區位置到開始
                 inputBuffer.getBuffer().rewind();
                 outputBuffer.getBuffer().rewind();
                 
-                Log.d(TAG, "Setup times - Buffer: " + bufferTime + "ms, Conversion: " + conversionTime + "ms");
-                
-                // 執行推理
+                // Execute inference
                 String accelerator = getAcceleratorInfo();
                 Log.d(TAG, "Running inference on " + accelerator);
-                
-                // 減少不必要的日誌以提高性能
-                if (Log.isLoggable(TAG, Log.DEBUG)) {
-                    Log.d(TAG, "Input buffer - capacity: " + inputBuffer.getBuffer().capacity() + 
-                               ", position: " + inputBuffer.getBuffer().position());
-                    Log.d(TAG, "Output buffer - capacity: " + outputBuffer.getBuffer().capacity() + 
-                               ", position: " + outputBuffer.getBuffer().position());
-                }
                 
                 try {
                     long inferenceStart = System.currentTimeMillis();
@@ -868,11 +636,6 @@ public class ThreadSafeSRProcessor {
         inputBuffer.getBuffer().rewind();
         
         DataType inputDataType = currentInterpreter.getInputTensor(0).dataType();
-        // 減少轉換過程中的日誌以提高性能
-        if (Log.isLoggable(TAG, Log.VERBOSE)) {
-            Log.v(TAG, "Converting bitmap to buffer, input data type: " + inputDataType);
-            Log.v(TAG, "Buffer capacity: " + inputBuffer.getBuffer().capacity() + ", pixels: " + cachedPixelArray.length);
-        }
         
         try {
             if (inputDataType == DataType.FLOAT32) {
@@ -884,8 +647,6 @@ public class ThreadSafeSRProcessor {
             } else {
                 throw new IllegalArgumentException("Unsupported input data type: " + inputDataType);
             }
-            
-            // 減少成功轉換的日誌輸出以提高性能
         } catch (Exception e) {
             Log.e(TAG, "Error converting bitmap to buffer", e);
             Log.e(TAG, "Buffer capacity: " + inputBuffer.getBuffer().capacity() + 
@@ -895,104 +656,59 @@ public class ThreadSafeSRProcessor {
         }
     }
     
-    /**
-     * 優化的像素到float32緩衝區轉換 - 使用緩存數組
-     */
     private void convertPixelsToFloat32Buffer(int[] pixels) {
-        // 重用緩存的float數組以避免GC
         int totalFloats = pixels.length * 3;
         
-        // 確保緩存數組足夠大
         if (cachedFloatArray.length < totalFloats) {
-            // 如果需要擴容，說明模型尺寸變了，重新分配
             cachedFloatArray = new float[totalFloats];
-            Log.d(TAG, "Expanded cached float array to " + totalFloats);
         }
         
-        // 批量轉換像素到float數組
-        for (int i = 0, floatIndex = 0; i < pixels.length; i++, floatIndex += 3) {
-            int pixel = pixels[i];
-            
-            // 使用位運算快速提取RGB並轉換為float
-            cachedFloatArray[floatIndex] = ((pixel >> 16) & 0xFF) * 0.003921569f; // / 255.0f的優化版本
-            cachedFloatArray[floatIndex + 1] = ((pixel >> 8) & 0xFF) * 0.003921569f;
-            cachedFloatArray[floatIndex + 2] = (pixel & 0xFF) * 0.003921569f;
-        }
+        // Use utility class for conversion
+        BitmapConverter.convertPixelsToFloat32(pixels, cachedFloatArray);
         
-        // 批量寫入到buffer，只使用需要的部分
+        // Write to buffer
         inputBuffer.getBuffer().asFloatBuffer().put(cachedFloatArray, 0, totalFloats);
     }
     
-    /**
-     * 優化的像素到uint8緩衝區轉換 - 使用緩存數組
-     */
     private void convertPixelsToUint8Buffer(int[] pixels) {
-        // 重用緩存的byte數組以避免GC
         int totalBytes = pixels.length * 3;
         
-        // 確保緩存數組足夠大
         if (cachedByteArray.length < totalBytes) {
             cachedByteArray = new byte[totalBytes];
-            Log.d(TAG, "Expanded cached byte array to " + totalBytes);
         }
         
-        // 批量轉換像素到byte數組
-        for (int i = 0, byteIndex = 0; i < pixels.length; i++, byteIndex += 3) {
-            int pixel = pixels[i];
-            
-            // 使用位運算快速提取RGB
-            cachedByteArray[byteIndex] = (byte) ((pixel >> 16) & 0xFF);
-            cachedByteArray[byteIndex + 1] = (byte) ((pixel >> 8) & 0xFF);
-            cachedByteArray[byteIndex + 2] = (byte) (pixel & 0xFF);
-        }
+        // Use utility class for conversion
+        BitmapConverter.convertPixelsToUint8(pixels, cachedByteArray);
         
-        // 批量寫入到buffer，只使用需要的部分
+        // Write to buffer
         inputBuffer.getBuffer().put(cachedByteArray, 0, totalBytes);
     }
     
     private Bitmap convertOutputToBitmap() {
-        // 獲取實際輸出形狀
         int[] outputShape = currentInterpreter.getOutputTensor(0).shape();
         DataType outputDataType = currentInterpreter.getOutputTensor(0).dataType();
         
-        Log.d(TAG, "Converting output with shape: " + java.util.Arrays.toString(outputShape));
-        Log.d(TAG, "Output data type: " + outputDataType);
-        
-        // 解析輸出尺寸 - TensorFlow格式為 [batch, height, width, channels]
-        int outputHeight, outputWidth, outputChannels;
+        // Parse output dimensions
+        int outputHeight, outputWidth;
         if (outputShape.length >= 4) {
-            // 標準NHWC格式
             outputHeight = outputShape[1];
             outputWidth = outputShape[2]; 
-            outputChannels = outputShape[3];
         } else if (outputShape.length == 3) {
-            // 沒有batch維度的HWC格式
             outputHeight = outputShape[0];
             outputWidth = outputShape[1];
-            outputChannels = outputShape[2];
         } else {
             Log.e(TAG, "Unexpected output shape length: " + outputShape.length);
             return null;
         }
         
-        // 驗證輸出是否為期望的尺寸
-        if (outputWidth != actualOutputWidth || outputHeight != actualOutputHeight) {
-            Log.w(TAG, "Unexpected output size: " + outputWidth + "x" + outputHeight + 
-                      ", expected: " + actualOutputWidth + "x" + actualOutputHeight);
-        }
-        
-        Log.d(TAG, "Output dimensions: " + outputWidth + "x" + outputHeight + "x" + outputChannels);
-        
         int totalPixels = outputWidth * outputHeight;
         
-        // 使用預分配的緩存像素數組，避免大量記憶體分配
         if (cachedOutputPixelArray.length < totalPixels) {
-            Log.w(TAG, "Output pixel cache too small, expanding from " + cachedOutputPixelArray.length + 
-                      " to " + totalPixels);
             cachedOutputPixelArray = new int[totalPixels];
         }
         
         outputBuffer.getBuffer().rewind();
+        
         
         try {
             if (outputDataType == DataType.FLOAT32) {
@@ -1001,6 +717,9 @@ public class ThreadSafeSRProcessor {
             } else if (outputDataType == DataType.UINT8) {
                 // 優化的uint8輸出處理 - 使用緩存數組
                 convertUint8OutputToPixelsCached(cachedOutputPixelArray, totalPixels);
+            } else if (outputDataType == DataType.INT8) {
+                // INT8輸出處理 - 轉換到0-255範圍
+                convertInt8OutputToPixelsCached(cachedOutputPixelArray, totalPixels);
             } else {
                 Log.e(TAG, "Unsupported output data type: " + outputDataType);
                 return null;
@@ -1017,225 +736,77 @@ public class ThreadSafeSRProcessor {
         return Bitmap.createBitmap(bitmapPixels, outputWidth, outputHeight, Bitmap.Config.ARGB_8888);
     }
     
-    /**
-     * 優化的float32到像素轉換 - 使用預分配緩存數組
-     */
     private void convertFloat32OutputToPixelsCached(int[] pixels, int totalPixels) {
-        // 批量讀取所有float數據到緩存數組
-        int totalFloats = totalPixels * 3; // RGB 3個通道
+        int totalFloats = totalPixels * 3;
         
-        // 確保緩存數組足夠大
         if (cachedOutputFloatArray.length < totalFloats) {
-            Log.w(TAG, "Output float cache too small, expanding from " + cachedOutputFloatArray.length + 
-                      " to " + totalFloats);
             cachedOutputFloatArray = new float[totalFloats];
         }
         
-        // 一次性讀取所有float數據到緩存數組
+        // Read all float data to cached array
         outputBuffer.getBuffer().asFloatBuffer().get(cachedOutputFloatArray, 0, totalFloats);
         
-        // 決定是否使用並行處理 - 只有大圖才值得並行處理開銷
-        if (totalPixels > 1000000) { // 大於100萬像素使用並行
-            convertFloat32ParallelCached(pixels, totalPixels);
+        // Use utility class for conversion with parallel processing support
+        if (totalPixels > Constants.LARGE_IMAGE_PIXEL_THRESHOLD) {
+            BitmapConverter.convertFloat32ToPixelsParallel(cachedOutputFloatArray, pixels, conversionExecutor);
         } else {
-            convertFloat32SequentialCached(pixels, totalPixels);
+            BitmapConverter.convertFloat32ToPixels(cachedOutputFloatArray, pixels);
         }
     }
     
-    /**
-     * 優化的float32到像素轉換 - 並行處理版本（舊版本，保留兼容）
-     */
-    private void convertFloat32OutputToPixels(int[] pixels, int totalPixels) {
-        // 批量讀取所有float數據到數組
-        int totalFloats = totalPixels * 3; // RGB 3個通道
-        float[] floatData = new float[totalFloats];
-        
-        // 一次性讀取所有float數據
-        outputBuffer.getBuffer().asFloatBuffer().get(floatData);
-        
-        // 決定是否使用並行處理 - 只有大圖才值得並行處理開銷
-        if (totalPixels > 1000000) { // 大於100萬像素使用並行
-            convertFloat32Parallel(pixels, floatData, totalPixels);
-        } else {
-            convertFloat32Sequential(pixels, floatData, totalPixels);
-        }
-    }
     
-    /**
-     * 並行轉換float32數據
-     */
-    private void convertFloat32Parallel(int[] pixels, float[] floatData, int totalPixels) {
-        int numThreads = Math.min(4, Runtime.getRuntime().availableProcessors());
-        int pixelsPerThread = totalPixels / numThreads;
-        CountDownLatch latch = new CountDownLatch(numThreads);
-        
-        for (int t = 0; t < numThreads; t++) {
-            final int threadIndex = t;
-            final int startPixel = t * pixelsPerThread;
-            final int endPixel = (t == numThreads - 1) ? totalPixels : (t + 1) * pixelsPerThread;
-            
-            conversionExecutor.submit(() -> {
-                try {
-                    // 處理這個線程負責的像素範圍
-                    for (int i = startPixel, floatIndex = startPixel * 3; i < endPixel; i++, floatIndex += 3) {
-                        float r = floatData[floatIndex];
-                        float g = floatData[floatIndex + 1];
-                        float b = floatData[floatIndex + 2];
-                        
-                        // 快速clamp和轉換
-                        int red = (int) (Math.max(0, Math.min(1, r)) * 255);
-                        int green = (int) (Math.max(0, Math.min(1, g)) * 255);
-                        int blue = (int) (Math.max(0, Math.min(1, b)) * 255);
-                        
-                        pixels[i] = 0xFF000000 | (red << 16) | (green << 8) | blue;
-                    }
-                } finally {
-                    latch.countDown();
-                }
-            });
-        }
-        
-        try {
-            latch.await(); // 等待所有線程完成
-        } catch (InterruptedException e) {
-            Log.e(TAG, "Parallel conversion interrupted", e);
-            Thread.currentThread().interrupt();
-        }
-    }
     
-    /**
-     * 序列轉換float32數據 (小圖片使用)
-     */
-    private void convertFloat32Sequential(int[] pixels, float[] floatData, int totalPixels) {
-        // 批量轉換 - 減少循環開銷和函數調用
-        for (int i = 0, floatIndex = 0; i < totalPixels; i++, floatIndex += 3) {
-            // 直接處理3個float值，避免重複的Math.max/Math.min調用
-            float r = floatData[floatIndex];
-            float g = floatData[floatIndex + 1];
-            float b = floatData[floatIndex + 2];
-            
-            // 更快的clamp和轉換 - 使用位運算優化
-            int red = (int) (Math.max(0, Math.min(1, r)) * 255);
-            int green = (int) (Math.max(0, Math.min(1, g)) * 255);
-            int blue = (int) (Math.max(0, Math.min(1, b)) * 255);
-            
-            // 使用位運算組合RGB
-            pixels[i] = 0xFF000000 | (red << 16) | (green << 8) | blue;
-        }
-    }
-    
-    /**
-     * 並行轉換float32數據 - 使用緩存數組版本
-     */
-    private void convertFloat32ParallelCached(int[] pixels, int totalPixels) {
-        int numThreads = Math.min(4, Runtime.getRuntime().availableProcessors());
-        int pixelsPerThread = totalPixels / numThreads;
-        CountDownLatch latch = new CountDownLatch(numThreads);
-        
-        for (int t = 0; t < numThreads; t++) {
-            final int threadIndex = t;
-            final int startPixel = t * pixelsPerThread;
-            final int endPixel = (t == numThreads - 1) ? totalPixels : (t + 1) * pixelsPerThread;
-            
-            conversionExecutor.submit(() -> {
-                try {
-                    // 處理這個線程負責的像素範圍 - 使用緩存數組
-                    for (int i = startPixel, floatIndex = startPixel * 3; i < endPixel; i++, floatIndex += 3) {
-                        float r = cachedOutputFloatArray[floatIndex];
-                        float g = cachedOutputFloatArray[floatIndex + 1];
-                        float b = cachedOutputFloatArray[floatIndex + 2];
-                        
-                        // 快速clamp和轉換
-                        int red = (int) (Math.max(0, Math.min(1, r)) * 255);
-                        int green = (int) (Math.max(0, Math.min(1, g)) * 255);
-                        int blue = (int) (Math.max(0, Math.min(1, b)) * 255);
-                        
-                        pixels[i] = 0xFF000000 | (red << 16) | (green << 8) | blue;
-                    }
-                } finally {
-                    latch.countDown();
-                }
-            });
-        }
-        
-        try {
-            latch.await(); // 等待所有線程完成
-        } catch (InterruptedException e) {
-            Log.e(TAG, "Parallel conversion interrupted", e);
-            Thread.currentThread().interrupt();
-        }
-    }
-    
-    /**
-     * 序列轉換float32數據 - 使用緩存數組版本 (小圖片使用)
-     */
-    private void convertFloat32SequentialCached(int[] pixels, int totalPixels) {
-        // 批量轉換 - 使用緩存數組，減少記憶體分配
-        for (int i = 0, floatIndex = 0; i < totalPixels; i++, floatIndex += 3) {
-            // 直接處理3個float值，避免重複的Math.max/Math.min調用
-            float r = cachedOutputFloatArray[floatIndex];
-            float g = cachedOutputFloatArray[floatIndex + 1];
-            float b = cachedOutputFloatArray[floatIndex + 2];
-            
-            // 更快的clamp和轉換 - 使用位運算優化
-            int red = (int) (Math.max(0, Math.min(1, r)) * 255);
-            int green = (int) (Math.max(0, Math.min(1, g)) * 255);
-            int blue = (int) (Math.max(0, Math.min(1, b)) * 255);
-            
-            // 使用位運算組合RGB
-            pixels[i] = 0xFF000000 | (red << 16) | (green << 8) | blue;
-        }
-    }
-    
-    /**
-     * 優化的uint8到像素轉換 - 使用預分配緩存數組
-     */
     private void convertUint8OutputToPixelsCached(int[] pixels, int totalPixels) {
-        // 批量讀取所有byte數據到緩存數組
-        int totalBytes = totalPixels * 3; // RGB 3個通道
+        int totalBytes = totalPixels * 3;
         
-        // 確保緩存數組足夠大
         if (cachedOutputByteArray.length < totalBytes) {
-            Log.w(TAG, "Output byte cache too small, expanding from " + cachedOutputByteArray.length + 
-                      " to " + totalBytes);
             cachedOutputByteArray = new byte[totalBytes];
         }
         
-        // 一次性讀取所有byte數據到緩存數組
+        // Read all byte data to cached array
         outputBuffer.getBuffer().get(cachedOutputByteArray, 0, totalBytes);
         
-        // 決定是否使用並行處理
-        if (totalPixels > 1000000) { // 大於100萬像素使用並行
-            convertUint8ParallelCached(pixels, totalPixels);
+        // Use utility class for conversion with parallel processing support
+        if (totalPixels > Constants.LARGE_IMAGE_PIXEL_THRESHOLD) {
+            BitmapConverter.convertUint8ToPixelsParallel(cachedOutputByteArray, pixels, conversionExecutor);
         } else {
-            convertUint8SequentialCached(pixels, totalPixels);
+            BitmapConverter.convertUint8ToPixels(cachedOutputByteArray, pixels);
         }
     }
     
-    /**
-     * 優化的uint8到像素轉換 - 並行處理版本（舊版本，保留兼容）
-     */
-    private void convertUint8OutputToPixels(int[] pixels, int totalPixels) {
-        // 批量讀取所有byte數據到數組
-        int totalBytes = totalPixels * 3; // RGB 3個通道
-        byte[] byteData = new byte[totalBytes];
+    private void convertInt8OutputToPixelsCached(int[] pixels, int totalPixels) {
+        int totalBytes = totalPixels * 3;
         
-        // 一次性讀取所有byte數據
-        outputBuffer.getBuffer().get(byteData);
+        if (cachedOutputByteArray.length < totalBytes) {
+            cachedOutputByteArray = new byte[totalBytes];
+        }
         
-        // 決定是否使用並行處理
-        if (totalPixels > 1000000) { // 大於100萬像素使用並行
-            convertUint8Parallel(pixels, byteData, totalPixels);
+        // Read all byte data to cached array
+        outputBuffer.getBuffer().get(cachedOutputByteArray, 0, totalBytes);
+        
+        // Convert INT8 to pixels (INT8 range is -128 to 127, convert to 0-255)
+        if (totalPixels > Constants.LARGE_IMAGE_PIXEL_THRESHOLD) {
+            convertInt8ToPixelsParallel(cachedOutputByteArray, pixels);
         } else {
-            convertUint8Sequential(pixels, byteData, totalPixels);
+            convertInt8ToPixelsSequential(cachedOutputByteArray, pixels, totalPixels);
         }
     }
     
-    /**
-     * 並行轉換uint8數據
-     */
-    private void convertUint8Parallel(int[] pixels, byte[] byteData, int totalPixels) {
-        int numThreads = Math.min(4, Runtime.getRuntime().availableProcessors());
+    private void convertInt8ToPixelsSequential(byte[] byteArray, int[] pixels, int totalPixels) {
+        for (int i = 0, byteIndex = 0; i < totalPixels; i++, byteIndex += 3) {
+            // Convert INT8 [-128, 127] to [0, 255]
+            int r = (byteArray[byteIndex] + 128) & 0xFF;
+            int g = (byteArray[byteIndex + 1] + 128) & 0xFF;
+            int b = (byteArray[byteIndex + 2] + 128) & 0xFF;
+            
+            pixels[i] = 0xFF000000 | (r << 16) | (g << 8) | b;
+        }
+    }
+    
+    private void convertInt8ToPixelsParallel(byte[] byteArray, int[] pixels) {
+        int totalPixels = pixels.length;
+        int numThreads = Math.min(Constants.MAX_CONVERSION_THREADS, 
+                                Runtime.getRuntime().availableProcessors());
         int pixelsPerThread = totalPixels / numThreads;
         CountDownLatch latch = new CountDownLatch(numThreads);
         
@@ -1246,11 +817,11 @@ public class ThreadSafeSRProcessor {
             
             conversionExecutor.submit(() -> {
                 try {
-                    // 處理這個線程負責的像素範圍
                     for (int i = startPixel, byteIndex = startPixel * 3; i < endPixel; i++, byteIndex += 3) {
-                        int r = byteData[byteIndex] & 0xFF;
-                        int g = byteData[byteIndex + 1] & 0xFF;
-                        int b = byteData[byteIndex + 2] & 0xFF;
+                        // Convert INT8 [-128, 127] to [0, 255]
+                        int r = (byteArray[byteIndex] + 128) & 0xFF;
+                        int g = (byteArray[byteIndex + 1] + 128) & 0xFF;
+                        int b = (byteArray[byteIndex + 2] + 128) & 0xFF;
                         
                         pixels[i] = 0xFF000000 | (r << 16) | (g << 8) | b;
                     }
@@ -1261,79 +832,14 @@ public class ThreadSafeSRProcessor {
         }
         
         try {
-            latch.await(); // 等待所有線程完成
+            latch.await();
         } catch (InterruptedException e) {
-            Log.e(TAG, "Parallel conversion interrupted", e);
+            Log.e(TAG, "Parallel INT8 conversion interrupted", e);
             Thread.currentThread().interrupt();
         }
     }
     
-    /**
-     * 序列轉換uint8數據 (小圖片使用)
-     */
-    private void convertUint8Sequential(int[] pixels, byte[] byteData, int totalPixels) {
-        // 批量轉換 - 使用位運算優化
-        for (int i = 0, byteIndex = 0; i < totalPixels; i++, byteIndex += 3) {
-            int r = byteData[byteIndex] & 0xFF;
-            int g = byteData[byteIndex + 1] & 0xFF;
-            int b = byteData[byteIndex + 2] & 0xFF;
-            
-            // 使用位運算組合RGB
-            pixels[i] = 0xFF000000 | (r << 16) | (g << 8) | b;
-        }
-    }
     
-    /**
-     * 並行轉換uint8數據 - 使用緩存數組版本
-     */
-    private void convertUint8ParallelCached(int[] pixels, int totalPixels) {
-        int numThreads = Math.min(4, Runtime.getRuntime().availableProcessors());
-        int pixelsPerThread = totalPixels / numThreads;
-        CountDownLatch latch = new CountDownLatch(numThreads);
-        
-        for (int t = 0; t < numThreads; t++) {
-            final int threadIndex = t;
-            final int startPixel = t * pixelsPerThread;
-            final int endPixel = (t == numThreads - 1) ? totalPixels : (t + 1) * pixelsPerThread;
-            
-            conversionExecutor.submit(() -> {
-                try {
-                    // 處理這個線程負責的像素範圍 - 使用緩存數組
-                    for (int i = startPixel, byteIndex = startPixel * 3; i < endPixel; i++, byteIndex += 3) {
-                        int r = cachedOutputByteArray[byteIndex] & 0xFF;
-                        int g = cachedOutputByteArray[byteIndex + 1] & 0xFF;
-                        int b = cachedOutputByteArray[byteIndex + 2] & 0xFF;
-                        
-                        pixels[i] = 0xFF000000 | (r << 16) | (g << 8) | b;
-                    }
-                } finally {
-                    latch.countDown();
-                }
-            });
-        }
-        
-        try {
-            latch.await(); // 等待所有線程完成
-        } catch (InterruptedException e) {
-            Log.e(TAG, "Parallel conversion interrupted", e);
-            Thread.currentThread().interrupt();
-        }
-    }
-    
-    /**
-     * 序列轉換uint8數據 - 使用緩存數組版本 (小圖片使用)
-     */
-    private void convertUint8SequentialCached(int[] pixels, int totalPixels) {
-        // 批量轉換 - 使用緩存數組，減少記憶體分配
-        for (int i = 0, byteIndex = 0; i < totalPixels; i++, byteIndex += 3) {
-            int r = cachedOutputByteArray[byteIndex] & 0xFF;
-            int g = cachedOutputByteArray[byteIndex + 1] & 0xFF;
-            int b = cachedOutputByteArray[byteIndex + 2] & 0xFF;
-            
-            // 使用位運算組合RGB
-            pixels[i] = 0xFF000000 | (r << 16) | (g << 8) | b;
-        }
-    }
     
     public void close() {
         if (srHandler != null) {
@@ -1363,11 +869,12 @@ public class ThreadSafeSRProcessor {
             });
         }
         
-        // 關閉並行處理執行器
+        // Shutdown conversion executor
         if (conversionExecutor != null) {
             conversionExecutor.shutdown();
             try {
-                if (!conversionExecutor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                if (!conversionExecutor.awaitTermination(Constants.EXECUTOR_SHUTDOWN_TIMEOUT_SECONDS, 
+                                                         java.util.concurrent.TimeUnit.SECONDS)) {
                     conversionExecutor.shutdownNow();
                 }
             } catch (InterruptedException e) {

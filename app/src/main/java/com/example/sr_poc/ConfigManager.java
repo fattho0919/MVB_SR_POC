@@ -14,10 +14,11 @@ import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.List;
 
+import com.example.sr_poc.utils.Constants;
+
 public class ConfigManager {
     
     private static final String TAG = "ConfigManager";
-    private static final String CONFIG_FILE_PATH = "config/sr_config.json";
     
     private static ConfigManager instance;
     private JSONObject config;
@@ -86,7 +87,7 @@ public class ConfigManager {
     }
     
     private String loadJsonFromAssets() throws IOException {
-        InputStream inputStream = context.getAssets().open(CONFIG_FILE_PATH);
+        InputStream inputStream = context.getAssets().open(Constants.CONFIG_FILE_PATH);
         BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
         StringBuilder stringBuilder = new StringBuilder();
         String line;

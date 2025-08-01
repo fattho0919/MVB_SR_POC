@@ -13,6 +13,8 @@ import android.util.Log;
 import android.view.MotionEvent;
 import android.view.View;
 
+import com.example.sr_poc.utils.Constants;
+
 public class ImageComparisonView extends View {
     private static final String TAG = "ImageComparisonView";
     
@@ -25,10 +27,6 @@ public class ImageComparisonView extends View {
     private Paint shadowPaint;
     private boolean isDragging = false;
     
-    // 標籤相關
-    private static final int LABEL_HEIGHT = 40;
-    private static final int LABEL_PADDING = 12;
-    private static final int LABEL_TEXT_SIZE = 22;
     
     public ImageComparisonView(Context context) {
         super(context);
@@ -56,7 +54,7 @@ public class ImageComparisonView extends View {
         // 文字畫筆
         textPaint = new Paint();
         textPaint.setColor(0xFFFFFFFF);
-        textPaint.setTextSize(LABEL_TEXT_SIZE);
+        textPaint.setTextSize(Constants.LABEL_TEXT_SIZE);
         textPaint.setAntiAlias(true);
         textPaint.setTypeface(Typeface.DEFAULT_BOLD);
         textPaint.setShadowLayer(3f, 0f, 1f, 0x80000000);
@@ -168,14 +166,14 @@ public class ImageComparisonView extends View {
             String leftLabel = "原圖";
             float leftTextWidth = textPaint.measureText(leftLabel);
             float leftLabelX = (dividerX - leftTextWidth) / 2f;
-            float labelY = LABEL_HEIGHT / 2f + LABEL_TEXT_SIZE / 3f;
+            float labelY = Constants.LABEL_HEIGHT / 2f + Constants.LABEL_TEXT_SIZE / 3f;
             
             // 繪製標籤背景
             RectF leftBgRect = new RectF(
-                leftLabelX - LABEL_PADDING,
-                LABEL_PADDING,
-                leftLabelX + leftTextWidth + LABEL_PADDING,
-                LABEL_HEIGHT
+                leftLabelX - Constants.LABEL_PADDING,
+                Constants.LABEL_PADDING,
+                leftLabelX + leftTextWidth + Constants.LABEL_PADDING,
+                Constants.LABEL_HEIGHT
             );
             canvas.drawRoundRect(leftBgRect, 12f, 12f, backgroundPaint);
             
@@ -188,14 +186,14 @@ public class ImageComparisonView extends View {
             String rightLabel = "SR 結果";
             float rightTextWidth = textPaint.measureText(rightLabel);
             float rightLabelX = dividerX + (width - dividerX - rightTextWidth) / 2f;
-            float labelY = LABEL_HEIGHT / 2f + LABEL_TEXT_SIZE / 3f;
+            float labelY = Constants.LABEL_HEIGHT / 2f + Constants.LABEL_TEXT_SIZE / 3f;
             
             // 繪製標籤背景
             RectF rightBgRect = new RectF(
-                rightLabelX - LABEL_PADDING,
-                LABEL_PADDING,
-                rightLabelX + rightTextWidth + LABEL_PADDING,
-                LABEL_HEIGHT
+                rightLabelX - Constants.LABEL_PADDING,
+                Constants.LABEL_PADDING,
+                rightLabelX + rightTextWidth + Constants.LABEL_PADDING,
+                Constants.LABEL_HEIGHT
             );
             canvas.drawRoundRect(rightBgRect, 12f, 12f, backgroundPaint);
             
@@ -245,8 +243,8 @@ public class ImageComparisonView extends View {
         int width = getMeasuredWidth();
         int height = getMeasuredHeight();
         
-        if (height < 300) {
-            height = 300;
+        if (height < Constants.MIN_VIEW_HEIGHT) {
+            height = Constants.MIN_VIEW_HEIGHT;
         }
         
         setMeasuredDimension(width, height);

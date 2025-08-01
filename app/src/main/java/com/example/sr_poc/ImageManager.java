@@ -11,10 +11,11 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+import com.example.sr_poc.utils.Constants;
+
 public class ImageManager {
     
     private static final String TAG = "ImageManager";
-    private static final String IMAGES_PATH = "images/";
     
     private Context context;
     private List<String> imageNames;
@@ -52,7 +53,7 @@ public class ImageManager {
     
     private void loadCurrentImage() {
         String imageName = imageNames.get(currentIndex);
-        String imagePath = IMAGES_PATH + imageName;
+        String imagePath = Constants.IMAGES_PATH + imageName;
         
         try (InputStream inputStream = context.getAssets().open(imagePath)) {
             currentBitmap = BitmapFactory.decodeStream(inputStream);
