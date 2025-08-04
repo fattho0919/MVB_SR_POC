@@ -32,6 +32,12 @@
             </intent-filter>
         </activity>
         
+        <!-- NPU Model Test Activity -->
+        <activity
+            android:name=".NPUModelTestActivity"
+            android:exported="false"
+            android:label="NPU Model Test" />
+        
     </application>
 
 </manifest>

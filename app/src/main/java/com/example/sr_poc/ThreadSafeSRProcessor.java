@@ -50,6 +50,10 @@ public class ThreadSafeSRProcessor {
     private TensorBuffer inputBuffer;
     private TensorBuffer outputBuffer;
     
+    // Direct ByteBuffers for INT8 models (TensorBuffer doesn't support INT8)
+    private ByteBuffer inputByteBuffer;
+    private ByteBuffer outputByteBuffer;
+    
     private boolean isInitialized = false;
     private ProcessingMode currentMode = ProcessingMode.CPU;
     
@@ -469,25 +473,53 @@ public class ThreadSafeSRProcessor {
         Log.d(TAG, "Required output buffer: " + requiredOutputBytes + " bytes (" + outputElements + " elements)");
         
         // 檢查是否需要重新分配輸入緩衝區
-        boolean needNewInputBuffer = inputBuffer == null || 
-                                   inputBuffer.getBuffer().capacity() != requiredInputBytes ||
-                                   inputBuffer.getDataType() != inputDataType;
+        boolean needNewInputBuffer;
+        if (inputDataType == DataType.INT8) {
+            needNewInputBuffer = inputByteBuffer == null || inputByteBuffer.capacity() != requiredInputBytes;
+        } else {
+            needNewInputBuffer = inputBuffer == null || 
+                               inputBuffer.getBuffer().capacity() != requiredInputBytes ||
+                               inputBuffer.getDataType() != inputDataType;
+        }
                                    
         // 檢查是否需要重新分配輸出緩衝區
-        boolean needNewOutputBuffer = outputBuffer == null || 
-                                    outputBuffer.getBuffer().capacity() != requiredOutputBytes ||
-                                    outputBuffer.getDataType() != outputDataType;
+        boolean needNewOutputBuffer;
+        if (outputDataType == DataType.INT8) {
+            needNewOutputBuffer = outputByteBuffer == null || outputByteBuffer.capacity() != requiredOutputBytes;
+        } else {
+            needNewOutputBuffer = outputBuffer == null || 
+                                outputBuffer.getBuffer().capacity() != requiredOutputBytes ||
+                                outputBuffer.getDataType() != outputDataType;
+        }
         
         if (needNewInputBuffer) {
             Log.d(TAG, "Reallocating input buffer");
-            inputBuffer = TensorBuffer.createFixedSize(inputShape, inputDataType);
-            Log.d(TAG, "New input buffer capacity: " + inputBuffer.getBuffer().capacity() + " bytes");
+            if (inputDataType == DataType.INT8) {
+                // Use direct ByteBuffer for INT8 since TensorBuffer doesn't support it
+                inputByteBuffer = ByteBuffer.allocateDirect((int) requiredInputBytes);
+                inputByteBuffer.order(java.nio.ByteOrder.nativeOrder());
+                inputBuffer = null; // Clear TensorBuffer
+                Log.d(TAG, "New input ByteBuffer capacity: " + inputByteBuffer.capacity() + " bytes");
+            } else {
+                inputBuffer = TensorBuffer.createFixedSize(inputShape, inputDataType);
+                inputByteBuffer = null; // Clear direct buffer
+                Log.d(TAG, "New input TensorBuffer capacity: " + inputBuffer.getBuffer().capacity() + " bytes");
+            }
         }
         
         if (needNewOutputBuffer) {
             Log.d(TAG, "Reallocating output buffer");
-            outputBuffer = TensorBuffer.createFixedSize(outputShape, outputDataType);
-            Log.d(TAG, "New output buffer capacity: " + outputBuffer.getBuffer().capacity() + " bytes");
+            if (outputDataType == DataType.INT8) {
+                // Use direct ByteBuffer for INT8 since TensorBuffer doesn't support it
+                outputByteBuffer = ByteBuffer.allocateDirect((int) requiredOutputBytes);
+                outputByteBuffer.order(java.nio.ByteOrder.nativeOrder());
+                outputBuffer = null; // Clear TensorBuffer
+                Log.d(TAG, "New output ByteBuffer capacity: " + outputByteBuffer.capacity() + " bytes");
+            } else {
+                outputBuffer = TensorBuffer.createFixedSize(outputShape, outputDataType);
+                outputByteBuffer = null; // Clear direct buffer
+                Log.d(TAG, "New output TensorBuffer capacity: " + outputBuffer.getBuffer().capacity() + " bytes");
+            }
         }
         
         if (!needNewInputBuffer && !needNewOutputBuffer) {
@@ -547,8 +579,19 @@ public class ThreadSafeSRProcessor {
                 
                 ensureBuffersAreCorrectSize();
                 convertBitmapToBuffer(resizedInput);
-                inputBuffer.getBuffer().rewind();
-                outputBuffer.getBuffer().rewind();
+                
+                // Rewind the appropriate buffers
+                if (inputBuffer != null) {
+                    inputBuffer.getBuffer().rewind();
+                } else if (inputByteBuffer != null) {
+                    inputByteBuffer.rewind();
+                }
+                
+                if (outputBuffer != null) {
+                    outputBuffer.getBuffer().rewind();
+                } else if (outputByteBuffer != null) {
+                    outputByteBuffer.rewind();
+                }
                 
                 // Execute inference
                 String accelerator = getAcceleratorInfo();
@@ -572,7 +615,10 @@ public class ThreadSafeSRProcessor {
                                "Native Float32"));
                     }
                     
-                    currentInterpreter.run(inputBuffer.getBuffer(), outputBuffer.getBuffer());
+                    // Run inference with appropriate buffers
+                    ByteBuffer inputBuf = (inputBuffer != null) ? inputBuffer.getBuffer() : inputByteBuffer;
+                    ByteBuffer outputBuf = (outputBuffer != null) ? outputBuffer.getBuffer() : outputByteBuffer;
+                    currentInterpreter.run(inputBuf, outputBuf);
                     long pureInferenceTime = System.currentTimeMillis() - inferenceStart;
                     
                     // NPU性能分析
@@ -592,19 +638,32 @@ public class ThreadSafeSRProcessor {
                     // 強制重新分配緩衝區
                     inputBuffer = null;
                     outputBuffer = null;
+                    inputByteBuffer = null;
+                    outputByteBuffer = null;
                     ensureBuffersAreCorrectSize();
                     
                     // 重新轉換輸入
                     convertBitmapToBuffer(resizedInput);
                     
                     // 確保緩衝區位置正確
-                    inputBuffer.getBuffer().rewind();
-                    outputBuffer.getBuffer().rewind();
+                    if (inputBuffer != null) {
+                        inputBuffer.getBuffer().rewind();
+                    } else if (inputByteBuffer != null) {
+                        inputByteBuffer.rewind();
+                    }
+                    
+                    if (outputBuffer != null) {
+                        outputBuffer.getBuffer().rewind();
+                    } else if (outputByteBuffer != null) {
+                        outputByteBuffer.rewind();
+                    }
                     
                     Log.d(TAG, "Retrying inference with new buffers");
                     
                     // 重試推理
-                    currentInterpreter.run(inputBuffer.getBuffer(), outputBuffer.getBuffer());
+                    ByteBuffer retryInputBuf = (inputBuffer != null) ? inputBuffer.getBuffer() : inputByteBuffer;
+                    ByteBuffer retryOutputBuf = (outputBuffer != null) ? outputBuffer.getBuffer() : outputByteBuffer;
+                    currentInterpreter.run(retryInputBuf, retryOutputBuf);
                 }
                 
                 // 轉換輸出
@@ -633,7 +692,12 @@ public class ThreadSafeSRProcessor {
         // 使用緩存的像素數組避免重複分配
         bitmap.getPixels(cachedPixelArray, 0, actualInputWidth, 0, 0, actualInputWidth, actualInputHeight);
         
-        inputBuffer.getBuffer().rewind();
+        // Rewind the appropriate buffer
+        if (inputBuffer != null) {
+            inputBuffer.getBuffer().rewind();
+        } else if (inputByteBuffer != null) {
+            inputByteBuffer.rewind();
+        }
         
         DataType inputDataType = currentInterpreter.getInputTensor(0).dataType();
         
@@ -641,9 +705,12 @@ public class ThreadSafeSRProcessor {
             if (inputDataType == DataType.FLOAT32) {
                 // 優化的float32輸入處理 - 批量轉換
                 convertPixelsToFloat32Buffer(cachedPixelArray);
-            } else if (inputDataType == DataType.UINT8 || inputDataType == DataType.INT8) {
-                // 優化的uint8/int8輸入處理 - 批量轉換
+            } else if (inputDataType == DataType.UINT8) {
+                // 優化的uint8輸入處理 - 批量轉換
                 convertPixelsToUint8Buffer(cachedPixelArray);
+            } else if (inputDataType == DataType.INT8) {
+                // 優化的int8輸入處理 - 批量轉換
+                convertPixelsToInt8Buffer(cachedPixelArray);
             } else {
                 throw new IllegalArgumentException("Unsupported input data type: " + inputDataType);
             }
@@ -684,6 +751,20 @@ public class ThreadSafeSRProcessor {
         inputBuffer.getBuffer().put(cachedByteArray, 0, totalBytes);
     }
     
+    private void convertPixelsToInt8Buffer(int[] pixels) {
+        int totalBytes = pixels.length * 3;
+        
+        if (cachedByteArray.length < totalBytes) {
+            cachedByteArray = new byte[totalBytes];
+        }
+        
+        // Use utility class for conversion
+        BitmapConverter.convertPixelsToInt8(pixels, cachedByteArray);
+        
+        // Write to buffer (use direct ByteBuffer for INT8)
+        inputByteBuffer.put(cachedByteArray, 0, totalBytes);
+    }
+    
     private Bitmap convertOutputToBitmap() {
         int[] outputShape = currentInterpreter.getOutputTensor(0).shape();
         DataType outputDataType = currentInterpreter.getOutputTensor(0).dataType();
@@ -707,7 +788,12 @@ public class ThreadSafeSRProcessor {
             cachedOutputPixelArray = new int[totalPixels];
         }
         
-        outputBuffer.getBuffer().rewind();
+        // Rewind the appropriate output buffer
+        if (outputBuffer != null) {
+            outputBuffer.getBuffer().rewind();
+        } else if (outputByteBuffer != null) {
+            outputByteBuffer.rewind();
+        }
         
         
         try {
@@ -724,6 +810,10 @@ public class ThreadSafeSRProcessor {
                 Log.e(TAG, "Unsupported output data type: " + outputDataType);
                 return null;
             }
+            
+            // 添加輸出調試 - 檢查像素值範圍
+            debugPixelValues(cachedOutputPixelArray, totalPixels, outputDataType);
+            
         } catch (Exception e) {
             Log.e(TAG, "Error converting output buffer to bitmap", e);
             return null;
@@ -745,6 +835,9 @@ public class ThreadSafeSRProcessor {
         
         // Read all float data to cached array
         outputBuffer.getBuffer().asFloatBuffer().get(cachedOutputFloatArray, 0, totalFloats);
+        
+        // Debug original float values
+        debugFloat32Values(cachedOutputFloatArray, totalFloats);
         
         // Use utility class for conversion with parallel processing support
         if (totalPixels > Constants.LARGE_IMAGE_PIXEL_THRESHOLD) {
@@ -781,61 +874,123 @@ public class ThreadSafeSRProcessor {
             cachedOutputByteArray = new byte[totalBytes];
         }
         
-        // Read all byte data to cached array
-        outputBuffer.getBuffer().get(cachedOutputByteArray, 0, totalBytes);
+        // Read all byte data to cached array (use direct ByteBuffer for INT8)
+        outputByteBuffer.get(cachedOutputByteArray, 0, totalBytes);
         
-        // Convert INT8 to pixels (INT8 range is -128 to 127, convert to 0-255)
+        // Use utility class for conversion with parallel processing support
         if (totalPixels > Constants.LARGE_IMAGE_PIXEL_THRESHOLD) {
-            convertInt8ToPixelsParallel(cachedOutputByteArray, pixels);
+            BitmapConverter.convertInt8ToPixelsParallel(cachedOutputByteArray, pixels, conversionExecutor);
         } else {
-            convertInt8ToPixelsSequential(cachedOutputByteArray, pixels, totalPixels);
+            BitmapConverter.convertInt8ToPixels(cachedOutputByteArray, pixels);
         }
     }
     
-    private void convertInt8ToPixelsSequential(byte[] byteArray, int[] pixels, int totalPixels) {
-        for (int i = 0, byteIndex = 0; i < totalPixels; i++, byteIndex += 3) {
-            // Convert INT8 [-128, 127] to [0, 255]
-            int r = (byteArray[byteIndex] + 128) & 0xFF;
-            int g = (byteArray[byteIndex + 1] + 128) & 0xFF;
-            int b = (byteArray[byteIndex + 2] + 128) & 0xFF;
+    
+    private void debugFloat32Values(float[] floatArray, int totalFloats) {
+        if (totalFloats == 0) return;
+        
+        // Sample float values for analysis
+        int sampleSize = Math.min(300, totalFloats); // Sample 100 pixels = 300 floats (RGB)
+        
+        float min = Float.MAX_VALUE, max = Float.MIN_VALUE;
+        float sum = 0;
+        int zeroCount = 0, negativeCount = 0, aboveOneCount = 0;
+        
+        for (int i = 0; i < sampleSize; i++) {
+            float val = floatArray[i];
+            min = Math.min(min, val);
+            max = Math.max(max, val);
+            sum += val;
             
-            pixels[i] = 0xFF000000 | (r << 16) | (g << 8) | b;
+            if (val == 0.0f) zeroCount++;
+            if (val < 0.0f) negativeCount++;
+            if (val > 1.0f) aboveOneCount++;
+        }
+        
+        float mean = sum / sampleSize;
+        
+        Log.d(TAG, "=== Raw Float32 Output Analysis ===");
+        Log.d(TAG, "Sample size: " + sampleSize + "/" + totalFloats);
+        Log.d(TAG, "Range: [" + min + ", " + max + "]");
+        Log.d(TAG, "Mean: " + mean);
+        Log.d(TAG, "Zero values: " + zeroCount + " (" + (100.0 * zeroCount / sampleSize) + "%)");
+        Log.d(TAG, "Negative values: " + negativeCount + " (" + (100.0 * negativeCount / sampleSize) + "%)");
+        Log.d(TAG, "Above 1.0 values: " + aboveOneCount + " (" + (100.0 * aboveOneCount / sampleSize) + "%)");
+        
+        // Check for problematic ranges
+        if (min == 0.0f && max == 0.0f) {
+            Log.e(TAG, "⚠️ ALL FLOAT VALUES ARE ZERO! Model output is completely black.");
+        } else if (min < -1.0f || max > 1.0f) {
+            Log.w(TAG, "⚠️ Values outside typical [0,1] or [-1,1] range. May need different normalization.");
+        } else if (min >= 0.0f && max <= 1.0f) {
+            Log.d(TAG, "✓ Values in [0,1] range - standard normalization");
+        } else if (min >= -1.0f && max <= 1.0f) {
+            Log.d(TAG, "⚠️ Values in [-1,1] range - may need adjustment for INT8 quantized models");
+        }
+        
+        // Log first few values for debugging
+        Log.d(TAG, "First 9 float values (3 pixels RGB): ");
+        for (int i = 0; i < Math.min(9, sampleSize); i++) {
+            Log.d(TAG, "  [" + i + "] = " + floatArray[i]);
         }
     }
     
-    private void convertInt8ToPixelsParallel(byte[] byteArray, int[] pixels) {
-        int totalPixels = pixels.length;
-        int numThreads = Math.min(Constants.MAX_CONVERSION_THREADS, 
-                                Runtime.getRuntime().availableProcessors());
-        int pixelsPerThread = totalPixels / numThreads;
-        CountDownLatch latch = new CountDownLatch(numThreads);
+    private void debugPixelValues(int[] pixels, int totalPixels, DataType outputDataType) {
+        if (totalPixels == 0) return;
         
-        for (int t = 0; t < numThreads; t++) {
-            final int threadIndex = t;
-            final int startPixel = t * pixelsPerThread;
-            final int endPixel = (t == numThreads - 1) ? totalPixels : (t + 1) * pixelsPerThread;
+        // Sample pixel values for analysis
+        int sampleSize = Math.min(100, totalPixels);
+        
+        int minR = 255, maxR = 0, minG = 255, maxG = 0, minB = 255, maxB = 0;
+        int zeroCount = 0, maxCount = 0;
+        
+        for (int i = 0; i < sampleSize; i++) {
+            int pixel = pixels[i];
+            int r = (pixel >> 16) & 0xFF;
+            int g = (pixel >> 8) & 0xFF;
+            int b = pixel & 0xFF;
             
-            conversionExecutor.submit(() -> {
-                try {
-                    for (int i = startPixel, byteIndex = startPixel * 3; i < endPixel; i++, byteIndex += 3) {
-                        // Convert INT8 [-128, 127] to [0, 255]
-                        int r = (byteArray[byteIndex] + 128) & 0xFF;
-                        int g = (byteArray[byteIndex + 1] + 128) & 0xFF;
-                        int b = (byteArray[byteIndex + 2] + 128) & 0xFF;
-                        
-                        pixels[i] = 0xFF000000 | (r << 16) | (g << 8) | b;
-                    }
-                } finally {
-                    latch.countDown();
-                }
-            });
+            minR = Math.min(minR, r);
+            maxR = Math.max(maxR, r);
+            minG = Math.min(minG, g);
+            maxG = Math.max(maxG, g);
+            minB = Math.min(minB, b);
+            maxB = Math.max(maxB, b);
+            
+            if (pixel == 0xFF000000) zeroCount++; // Black pixel (ARGB)
+            if (r == 255 && g == 255 && b == 255) maxCount++; // White pixel
         }
         
-        try {
-            latch.await();
-        } catch (InterruptedException e) {
-            Log.e(TAG, "Parallel INT8 conversion interrupted", e);
-            Thread.currentThread().interrupt();
+        Log.d(TAG, "=== Output Pixel Analysis ===");
+        Log.d(TAG, "Data type: " + outputDataType);
+        Log.d(TAG, "Sample size: " + sampleSize + "/" + totalPixels);
+        Log.d(TAG, "R range: [" + minR + ", " + maxR + "]");
+        Log.d(TAG, "G range: [" + minG + ", " + maxG + "]");
+        Log.d(TAG, "B range: [" + minB + ", " + maxB + "]");
+        Log.d(TAG, "Black pixels: " + zeroCount + " (" + (100.0 * zeroCount / sampleSize) + "%)");
+        Log.d(TAG, "White pixels: " + maxCount + " (" + (100.0 * maxCount / sampleSize) + "%)");
+        
+        // Check for problematic conditions
+        if (zeroCount == sampleSize) {
+            Log.e(TAG, "⚠️ ALL PIXELS ARE BLACK! This indicates a conversion problem.");
+        } else if (maxCount == sampleSize) {
+            Log.e(TAG, "⚠️ ALL PIXELS ARE WHITE! This indicates a conversion problem.");
+        } else if (minR == maxR && minG == maxG && minB == maxB) {
+            Log.w(TAG, "⚠️ All pixels have identical values: RGB(" + minR + "," + minG + "," + minB + ")");
+        } else {
+            Log.d(TAG, "✓ Pixel values appear to have normal variation");
+        }
+        
+        // Log some actual pixel values for debugging
+        if (sampleSize >= 5) {
+            Log.d(TAG, "First 5 pixels: ");
+            for (int i = 0; i < 5; i++) {
+                int pixel = pixels[i];
+                int r = (pixel >> 16) & 0xFF;
+                int g = (pixel >> 8) & 0xFF;
+                int b = pixel & 0xFF;
+                Log.d(TAG, "  [" + i + "] RGB(" + r + "," + g + "," + b + ") = 0x" + Integer.toHexString(pixel));
+            }
         }
     }
     

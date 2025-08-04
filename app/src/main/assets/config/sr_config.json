@@ -1,13 +1,10 @@
 {
   "model": {
-    "default_model_path": "models/DSCF_float16.tflite",
+    "default_model_path": "models/DSCF_int8.tflite",
     "alternative_models": [
-      "models/DSCF_256x256_float16.tflite",
-      "models/DSCF_256x256_float32.tflite",
-      "models/DSCF_256x256_dynamic_range_quant.tflite",
-      "models/DSCF_dynamic_range_quant.tflite",
       "models/DSCF_float32.tflite",
-      "models/DSCF_float16.tflite"
+      "models/DSCF_float16.tflite",
+      "models/DSCF_int8.tflite"
     ],
     "expected_scale_factor": 4,
     "channels": 3
@@ -21,7 +18,7 @@
     "gpu_precision_loss_allowed": true,
     "gpu_wait_type": "PASSIVE",
     "gpu_backend": "OPENCL",
-    "enable_quantized_inference": false,
+    "enable_quantized_inference": true,
     "experimental_gpu_optimizations": true
   },
   "npu": {

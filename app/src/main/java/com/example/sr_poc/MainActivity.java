@@ -1,5 +1,6 @@
 package com.example.sr_poc;
 
+import android.content.Intent;
 import android.graphics.Bitmap;
 import android.os.Bundle;
 import android.view.View;
@@ -24,6 +25,7 @@ public class MainActivity extends AppCompatActivity {
     private Button btnCpuProcess;
     private Button btnNpuProcess;
     private Button btnResetImage;
+    private Button btnNpuTest;
     private CheckBox cbEnableTiling;
     private TextView tvInferenceTime;
     private TextView tvImageInfo;
@@ -53,6 +55,7 @@ public class MainActivity extends AppCompatActivity {
         btnCpuProcess = findViewById(R.id.btnCpuProcess);
         btnNpuProcess = findViewById(R.id.btnNpuProcess);
         btnResetImage = findViewById(R.id.btnResetImage);
+        btnNpuTest = findViewById(R.id.btnNpuTest);
         cbEnableTiling = findViewById(R.id.cbEnableTiling);
         tvInferenceTime = findViewById(R.id.tvInferenceTime);
         tvImageInfo = findViewById(R.id.tvImageInfo);
@@ -109,6 +112,7 @@ public class MainActivity extends AppCompatActivity {
         btnCpuProcess.setOnClickListener(v -> performSuperResolutionWithCpu());
         btnNpuProcess.setOnClickListener(v -> performSuperResolutionWithNpu());
         btnResetImage.setOnClickListener(v -> resetToOriginalImage());
+        btnNpuTest.setOnClickListener(v -> startNpuTest());
         
         // 長按checkbox顯示配置摘要
         cbEnableTiling.setOnLongClickListener(v -> {
@@ -257,6 +261,7 @@ public class MainActivity extends AppCompatActivity {
         btnCpuProcess.setEnabled(enabled);
         btnNpuProcess.setEnabled(enabled);
         btnResetImage.setEnabled(enabled);
+        btnNpuTest.setEnabled(true); // NPU Test button is always enabled
         cbEnableTiling.setEnabled(enabled);
     }
     
@@ -283,5 +288,10 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onPause() {
         super.onPause();
+    }
+    
+    private void startNpuTest() {
+        Intent intent = new Intent(this, NPUModelTestActivity.class);
+        startActivity(intent);
     }
 }
