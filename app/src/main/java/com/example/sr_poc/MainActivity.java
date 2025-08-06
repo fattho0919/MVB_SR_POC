@@ -122,6 +122,12 @@ public class MainActivity extends AppCompatActivity {
             return true;
         });
         
+        // 長按inference time顯示詳細策略信息
+        tvInferenceTime.setOnLongClickListener(v -> {
+            showDetailedStrategyInfo();
+            return true;
+        });
+        
         // checkbox變更時更新配置
         cbEnableTiling.setOnCheckedChangeListener((buttonView, isChecked) -> {
             configManager.setDefaultTilingEnabled(isChecked);
@@ -147,6 +153,20 @@ public class MainActivity extends AppCompatActivity {
     }
     
     private void performSuperResolutionWithNpu() {
+        // 檢查記憶體狀況，但不阻止執行
+        MemoryUtils.MemoryInfo memInfo = MemoryUtils.getCurrentMemoryInfo();
+        int requiredMemory = configManager.getBatchProcessingRequiredMb();
+        
+        if (memInfo.availableMemoryMB < requiredMemory) {
+            String warning = String.format("⚠️ Low Memory Warning: %dMB available < %dMB required.\n" +
+                                         "NPU batch processing may cause out-of-memory error.\n" +
+                                         "Proceeding as requested...", 
+                                         memInfo.availableMemoryMB, requiredMemory);
+            Toast.makeText(this, warning, Toast.LENGTH_LONG).show();
+            Log.w("MainActivity", "NPU batch processing with insufficient memory: " + 
+                  memInfo.availableMemoryMB + "MB < " + requiredMemory + "MB");
+        }
+        
         performSuperResolutionWithMode(ThreadSafeSRProcessor.ProcessingMode.NPU);
     }
     
@@ -173,7 +193,15 @@ public class MainActivity extends AppCompatActivity {
             
             @Override
             public void onProgress(String message) {
-                runOnUiThread(() -> tvInferenceTime.setText(message));
+                runOnUiThread(() -> {
+                    // Show memory category along with progress message
+                    String memoryCategory = MemoryUtils.getMemoryCategory();
+                    String displayMessage = message;
+                    if (message.startsWith("Strategy:")) {
+                        displayMessage = message + " [Memory: " + memoryCategory + "]";
+                    }
+                    tvInferenceTime.setText(displayMessage);
+                });
             }
             
             @Override
@@ -181,7 +209,11 @@ public class MainActivity extends AppCompatActivity {
                 runOnUiThread(() -> {
                     processedBitmap = resultBitmap;
                     updateComparisonView();
-                    tvInferenceTime.setText(timeMessage);
+                    
+                    // Enhanced time message with memory info
+                    MemoryUtils.MemoryInfo memInfo = MemoryUtils.getCurrentMemoryInfo();
+                    String enhancedMessage = timeMessage + " [" + memInfo.availableMemoryMB + "MB available]";
+                    tvInferenceTime.setText(enhancedMessage);
                 });
             }
             
@@ -293,5 +325,57 @@ public class MainActivity extends AppCompatActivity {
     private void startNpuTest() {
         Intent intent = new Intent(this, NPUModelTestActivity.class);
         startActivity(intent);
+    }
+    
+    private void showDetailedStrategyInfo() {
+        if (originalBitmap == null) {
+            Toast.makeText(this, "No image loaded", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        
+        StringBuilder info = new StringBuilder();
+        info.append("=== Processing Strategy Analysis ===\n");
+        
+        // Memory information
+        MemoryUtils.MemoryInfo memInfo = MemoryUtils.getCurrentMemoryInfo();
+        String memoryCategory = MemoryUtils.getMemoryCategory();
+        info.append("Memory Status: ").append(memoryCategory).append("\n");
+        info.append("Available: ").append(memInfo.availableMemoryMB).append("MB\n");
+        info.append("Required for Batch: ").append(configManager.getBatchProcessingRequiredMb()).append("MB\n\n");
+        
+        // Model information
+        info.append("Model Batch Support: ").append(srProcessor.isModelBatchCapable() ? "YES" : "NO").append("\n");
+        if (srProcessor.isModelBatchCapable()) {
+            info.append("Batch Size: ").append(srProcessor.getModelBatchSize()).append("\n");
+        }
+        info.append("Input Size: ").append(srProcessor.getModelInputWidth()).append("x").append(srProcessor.getModelInputHeight()).append("\n\n");
+        
+        // Image analysis
+        int imageWidth = originalBitmap.getWidth();
+        int imageHeight = originalBitmap.getHeight();
+        info.append("Current Image: ").append(imageWidth).append("x").append(imageHeight).append("\n");
+        
+        // Simulate strategy selection
+        ProcessingStrategySelector selector = new ProcessingStrategySelector(srProcessor, configManager);
+        ProcessingStrategySelector.StrategyDecision decision = selector.selectStrategy(
+            originalBitmap, null, cbEnableTiling.isChecked());
+        
+        info.append("Recommended Strategy: ").append(ProcessingStrategySelector.getStrategyDescription(decision.strategy)).append("\n");
+        info.append("Reason: ").append(decision.reason).append("\n");
+        info.append("Estimated Time: ").append(decision.estimatedTimeMs).append("ms\n");
+        
+        // Hardware info
+        info.append("\nHardware: ").append(HardwareInfo.getSocModel()).append("\n");
+        info.append("NPU Enabled: ").append(configManager.isEnableNpu() ? "YES" : "NO").append("\n");
+        
+        // Show in dialog-like manner with system log
+        Log.d("MainActivity", info.toString());
+        Toast.makeText(this, "Detailed strategy info logged to console", Toast.LENGTH_LONG).show();
+        
+        // Also show key info in shorter toast
+        String shortInfo = String.format("Strategy: %s\nMemory: %s (%dMB)\nEstimate: %dms", 
+            ProcessingStrategySelector.getStrategyDescription(decision.strategy),
+            memoryCategory, memInfo.availableMemoryMB, decision.estimatedTimeMs);
+        Toast.makeText(this, shortInfo, Toast.LENGTH_LONG).show();
     }
 }

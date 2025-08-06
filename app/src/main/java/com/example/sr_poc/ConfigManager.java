@@ -38,6 +38,7 @@ public class ConfigManager {
     private int maxInputSizeWithoutTiling;
     private int forceTilingAboveMb;
     private int lowMemoryWarningMb;
+    private int batchProcessingRequiredMb;
     private boolean gcAfterInference;
     private boolean enableMemoryLogging;
     private boolean defaultTilingEnabled;
@@ -156,6 +157,7 @@ public class ConfigManager {
         // Memory configuration
         JSONObject memoryConfig = config.getJSONObject("memory");
         lowMemoryWarningMb = memoryConfig.getInt("low_memory_warning_mb");
+        batchProcessingRequiredMb = memoryConfig.optInt("batch_processing_required_mb", 1200);
         gcAfterInference = memoryConfig.getBoolean("gc_after_inference");
         enableMemoryLogging = memoryConfig.getBoolean("enable_memory_logging");
         
@@ -188,6 +190,7 @@ public class ConfigManager {
         maxInputSizeWithoutTiling = 2048;
         forceTilingAboveMb = 500;
         lowMemoryWarningMb = 100;
+        batchProcessingRequiredMb = 1200;
         gcAfterInference = false;
         enableMemoryLogging = true;
         defaultTilingEnabled = true;
@@ -227,6 +230,7 @@ public class ConfigManager {
     public int getMaxInputSizeWithoutTiling() { return maxInputSizeWithoutTiling; }
     public int getForceTilingAboveMb() { return forceTilingAboveMb; }
     public int getLowMemoryWarningMb() { return lowMemoryWarningMb; }
+    public int getBatchProcessingRequiredMb() { return batchProcessingRequiredMb; }
     public boolean isGcAfterInference() { return gcAfterInference; }
     public boolean isEnableMemoryLogging() { return enableMemoryLogging; }
     public boolean isDefaultTilingEnabled() { return defaultTilingEnabled; }

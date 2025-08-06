@@ -25,6 +25,9 @@ public class HardwareInfo {
         // GPU資訊 (如果可以獲取)
         logGpuInfo();
 
+        // NPU 資訊
+        logNpuInfo();
+
         Log.d(TAG, "=== End Hardware Information ===");
     }
 
@@ -70,6 +73,7 @@ public class HardwareInfo {
     }
 
     private static void logAndroidInfo() {
+        Log.d(TAG, "=== Android Information ===");
         Log.d(TAG, "Android Version: " + android.os.Build.VERSION.RELEASE);
         Log.d(TAG, "API Level: " + android.os.Build.VERSION.SDK_INT);
         Log.d(TAG, "Device: " + android.os.Build.DEVICE);
@@ -144,52 +148,6 @@ public class HardwareInfo {
                 Log.d(TAG, "GPU (from hardware): " + gpuInfo);
             }
         }
-        
-        // 嘗試從系統屬性獲取 OpenGL ES 版本
-        try {
-            String glVersion = System.getProperty("ro.opengles.version");
-            if (glVersion != null) {
-                try {
-                    int version = Integer.parseInt(glVersion, 16);
-                    int major = version >> 16;
-                    int minor = version & 0xffff;
-                    Log.d(TAG, "OpenGL ES Version: " + major + "." + minor);
-                } catch (NumberFormatException e) {
-                    Log.d(TAG, "OpenGL ES Version (raw): " + glVersion);
-                }
-            }
-        } catch (Exception e) {
-            Log.w(TAG, "Could not read OpenGL version: " + e.getMessage());
-        }
-        
-        // 移除會產生 SELinux 警告的檔案路徑
-        // 只保留較安全的路徑嘗試
-        try {
-            String[] gpuFiles = {
-                "/proc/driver/mali/version"
-            };
-
-            for (String file : gpuFiles) {
-                try {
-                    BufferedReader reader = new BufferedReader(new FileReader(file));
-                    String line = reader.readLine();
-                    if (line != null && !line.trim().isEmpty()) {
-                        Log.d(TAG, "GPU Info from " + file + ": " + line.trim());
-                    }
-                    reader.close();
-                } catch (IOException e) {
-                    // 忽略，嘗試下一個文件
-                }
-            }
-            
-        } catch (Exception e) {
-            Log.w(TAG, "Could not read GPU files: " + e.getMessage());
-        }
-        
-        Log.d(TAG, "Note: For detailed GPU info, OpenGL ES context is required");
-        
-        // 記錄 NPU 相關信息
-        logNpuInfo();
     }
     
     /**

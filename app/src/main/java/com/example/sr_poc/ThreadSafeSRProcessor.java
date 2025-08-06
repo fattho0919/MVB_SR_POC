@@ -17,6 +17,8 @@ import org.tensorflow.lite.nnapi.NnApiDelegate;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.List;
+import java.util.ArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -104,7 +106,7 @@ public class ThreadSafeSRProcessor {
     public void initialize(InitCallback callback) {
         srHandler.post(() -> {
             try {
-                Log.d(TAG, "Initializing SR processor with tri-mode setup (GPU/CPU/NPU)");
+                Log.d(TAG, "Initializing SR processor");
                 long initStartTime = System.currentTimeMillis();
                 
                 String modelPath = configManager.getDefaultModelPath();
@@ -113,12 +115,16 @@ public class ThreadSafeSRProcessor {
                 
                 // 初始化GPU解釋器
                 boolean gpuSuccess = initializeGpuInterpreter(tfliteModel);
+                // boolean gpuSuccess = false;
                 
                 // 初始化CPU解釋器  
                 boolean cpuSuccess = initializeCpuInterpreter(tfliteModel);
+                // boolean cpuSuccess = false;
                 
                 // 初始化NPU解釋器
                 boolean npuSuccess = initializeNpuInterpreter(tfliteModel);
+                // boolean npuSuccess = false;
+
                 
                 if (!gpuSuccess && !cpuSuccess && !npuSuccess) {
                     throw new RuntimeException("Failed to initialize all interpreters (GPU, CPU, NPU)");
@@ -132,14 +138,14 @@ public class ThreadSafeSRProcessor {
                 } else if (gpuSuccess) {
                     currentInterpreter = gpuInterpreter;
                     currentMode = ProcessingMode.GPU;
-                    Log.d(TAG, "Default mode: GPU + NNAPI");
+                    Log.d(TAG, "Default mode: GPU");
                 } else {
                     currentInterpreter = cpuInterpreter;
                     currentMode = ProcessingMode.CPU;
-                    Log.d(TAG, "Default mode: NNAPI/CPU");
+                    Log.d(TAG, "Default mode: CPU");
                 }
                 
-                allocateBuffers();
+                ensureBuffersAreCorrectSize();
                 allocateCachedArrays();
                 
                 isInitialized = true;
@@ -162,10 +168,6 @@ public class ThreadSafeSRProcessor {
         try {
             Log.d(TAG, "Initializing GPU interpreter");
             Interpreter.Options gpuOptions = new Interpreter.Options();
-//            if (configManager.isUseNnapi()) {
-//                gpuOptions.setUseNNAPI(true);
-//                Log.d(TAG, "NNAPI enabled for GPU interpreter");
-//            }
             
             if (trySetupGpu(gpuOptions)) {
                 try {
@@ -312,10 +314,6 @@ public class ThreadSafeSRProcessor {
             GpuDelegate.Options gpuOptions = new GpuDelegate.Options();
             configureGpuDelegateOptions(gpuOptions);
             
-            if (android.os.Build.SOC_MODEL != null && android.os.Build.SOC_MODEL.contains("MT8195")) {
-                applyMaliOptimizations(gpuOptions);
-            }
-            
             gpuDelegate = new GpuDelegate(gpuOptions);
             options.addDelegate(gpuDelegate);
             Log.d(TAG, "GPU delegate configured");
@@ -351,10 +349,6 @@ public class ThreadSafeSRProcessor {
         gpuOptions.setPrecisionLossAllowed(configManager.isGpuPrecisionLossAllowed());
     }
     
-    private void applyMaliOptimizations(GpuDelegate.Options gpuOptions) {
-        // Mali-G57 optimizations (placeholder for future enhancements)
-    }
-    
     private void setupCpu(Interpreter.Options options) {
         // 使用配置文件中的線程數
         int configThreads = configManager.getDefaultNumThreads();
@@ -373,10 +367,6 @@ public class ThreadSafeSRProcessor {
                 Log.w(TAG, "XNNPACK not available");
             }
         }
-    }
-    
-    private void allocateBuffers() {
-        ensureBuffersAreCorrectSize();
     }
     
     private void allocateCachedArrays() {
@@ -464,7 +454,7 @@ public class ThreadSafeSRProcessor {
         }
         
         int inputBytesPerElement = (inputDataType == DataType.FLOAT32) ? 4 : 1;
-        int outputBytesPerElement = (outputDataType == DataType.FLOAT32) ? 4 : 1;
+        int outputBytesPerElement = (inputDataType == DataType.FLOAT32) ? 4 : 1;
         
         long requiredInputBytes = inputElements * inputBytesPerElement;
         long requiredOutputBytes = outputElements * outputBytesPerElement;
@@ -529,6 +519,11 @@ public class ThreadSafeSRProcessor {
     
     public interface InferenceCallback {
         void onResult(Bitmap result, long inferenceTime);
+        void onError(String error);
+    }
+    
+    public interface BatchInferenceCallback {
+        void onResult(List<Bitmap> results, long inferenceTime);
         void onError(String error);
     }
     
@@ -598,41 +593,29 @@ public class ThreadSafeSRProcessor {
                 Log.d(TAG, "Running inference on " + accelerator);
                 
                 try {
-                    long inferenceStart = System.currentTimeMillis();
-                    
-                    // NPU性能診斷
-                    if (currentMode == ProcessingMode.NPU) {
-                        String modelPath = configManager.getDefaultModelPath();
-                        boolean isFloat16Model = modelPath.contains("float16");
-                        boolean allowFp16 = configManager.isAllowFp16OnNpu();
+                        long inferenceStart = System.currentTimeMillis();
                         
-                        Log.d(TAG, "=== NPU Inference Diagnostics ===");
-                        Log.d(TAG, "Model: " + modelPath + " (" + (isFloat16Model ? "Float16" : "Float32") + ")");
-                        Log.d(TAG, "NPU allow_fp16: " + allowFp16);
-                        Log.d(TAG, "Expected behavior: " + 
-                              (isFloat16Model && allowFp16 ? "Native Float16 (or upconvert to Float32)" : 
-                               isFloat16Model && !allowFp16 ? "Force Float32 processing" :
-                               "Native Float32"));
-                    }
-                    
-                    // Run inference with appropriate buffers
-                    ByteBuffer inputBuf = (inputBuffer != null) ? inputBuffer.getBuffer() : inputByteBuffer;
-                    ByteBuffer outputBuf = (outputBuffer != null) ? outputBuffer.getBuffer() : outputByteBuffer;
-                    currentInterpreter.run(inputBuf, outputBuf);
-                    long pureInferenceTime = System.currentTimeMillis() - inferenceStart;
-                    
-                    // NPU性能分析
-                    if (currentMode == ProcessingMode.NPU) {
-                        Log.d(TAG, "NPU Pure inference time: " + pureInferenceTime + "ms");
-                        if (HardwareInfo.isMT8195()) {
-                            Log.d(TAG, "MediaTek MT8195 NPU Performance Analysis:");
-                            Log.d(TAG, "  - Inference time: " + pureInferenceTime + "ms");
-                            Log.d(TAG, "  - If Float16/Float32 times are identical, NNAPI may be upconverting");
+                        // NPU性能診斷
+                        if (currentMode == ProcessingMode.NPU) {
+                            String modelPath = configManager.getDefaultModelPath();
+                            boolean isFloat16Model = modelPath.contains("float16");
+                            boolean allowFp16 = configManager.isAllowFp16OnNpu();
+                            
+                            Log.d(TAG, "=== NPU Inference Diagnostics ===");
+                            Log.d(TAG, "Model: " + modelPath);
+                            Log.d(TAG, "NPU allow_fp16: " + allowFp16);
                         }
-                    } else {
-                        Log.d(TAG, "Pure inference time: " + pureInferenceTime + "ms");
+                        
+                        // Run inference with appropriate buffers
+                        ByteBuffer inputBuf = (inputBuffer != null) ? inputBuffer.getBuffer() : inputByteBuffer;
+                        ByteBuffer outputBuf = (outputBuffer != null) ? outputBuffer.getBuffer() : outputByteBuffer;
+                        currentInterpreter.run(inputBuf, outputBuf);
+                        long pureInferenceTime = System.currentTimeMillis() - inferenceStart;
+
+                        Log.d(TAG, "Pure inference time: " + pureInferenceTime + "ms"); 
                     }
-                } catch (java.nio.BufferOverflowException e) {
+                    
+                catch (java.nio.BufferOverflowException e) {
                     Log.e(TAG, "BufferOverflowException during inference, attempting to fix", e);
                     
                     // 強制重新分配緩衝區
@@ -811,8 +794,6 @@ public class ThreadSafeSRProcessor {
                 return null;
             }
             
-            // 添加輸出調試 - 檢查像素值範圍
-            debugPixelValues(cachedOutputPixelArray, totalPixels, outputDataType);
             
         } catch (Exception e) {
             Log.e(TAG, "Error converting output buffer to bitmap", e);
@@ -935,64 +916,6 @@ public class ThreadSafeSRProcessor {
         }
     }
     
-    private void debugPixelValues(int[] pixels, int totalPixels, DataType outputDataType) {
-        if (totalPixels == 0) return;
-        
-        // Sample pixel values for analysis
-        int sampleSize = Math.min(100, totalPixels);
-        
-        int minR = 255, maxR = 0, minG = 255, maxG = 0, minB = 255, maxB = 0;
-        int zeroCount = 0, maxCount = 0;
-        
-        for (int i = 0; i < sampleSize; i++) {
-            int pixel = pixels[i];
-            int r = (pixel >> 16) & 0xFF;
-            int g = (pixel >> 8) & 0xFF;
-            int b = pixel & 0xFF;
-            
-            minR = Math.min(minR, r);
-            maxR = Math.max(maxR, r);
-            minG = Math.min(minG, g);
-            maxG = Math.max(maxG, g);
-            minB = Math.min(minB, b);
-            maxB = Math.max(maxB, b);
-            
-            if (pixel == 0xFF000000) zeroCount++; // Black pixel (ARGB)
-            if (r == 255 && g == 255 && b == 255) maxCount++; // White pixel
-        }
-        
-        Log.d(TAG, "=== Output Pixel Analysis ===");
-        Log.d(TAG, "Data type: " + outputDataType);
-        Log.d(TAG, "Sample size: " + sampleSize + "/" + totalPixels);
-        Log.d(TAG, "R range: [" + minR + ", " + maxR + "]");
-        Log.d(TAG, "G range: [" + minG + ", " + maxG + "]");
-        Log.d(TAG, "B range: [" + minB + ", " + maxB + "]");
-        Log.d(TAG, "Black pixels: " + zeroCount + " (" + (100.0 * zeroCount / sampleSize) + "%)");
-        Log.d(TAG, "White pixels: " + maxCount + " (" + (100.0 * maxCount / sampleSize) + "%)");
-        
-        // Check for problematic conditions
-        if (zeroCount == sampleSize) {
-            Log.e(TAG, "⚠️ ALL PIXELS ARE BLACK! This indicates a conversion problem.");
-        } else if (maxCount == sampleSize) {
-            Log.e(TAG, "⚠️ ALL PIXELS ARE WHITE! This indicates a conversion problem.");
-        } else if (minR == maxR && minG == maxG && minB == maxB) {
-            Log.w(TAG, "⚠️ All pixels have identical values: RGB(" + minR + "," + minG + "," + minB + ")");
-        } else {
-            Log.d(TAG, "✓ Pixel values appear to have normal variation");
-        }
-        
-        // Log some actual pixel values for debugging
-        if (sampleSize >= 5) {
-            Log.d(TAG, "First 5 pixels: ");
-            for (int i = 0; i < 5; i++) {
-                int pixel = pixels[i];
-                int r = (pixel >> 16) & 0xFF;
-                int g = (pixel >> 8) & 0xFF;
-                int b = pixel & 0xFF;
-                Log.d(TAG, "  [" + i + "] RGB(" + r + "," + g + "," + b + ") = 0x" + Integer.toHexString(pixel));
-            }
-        }
-    }
     
     
     
@@ -1063,13 +986,34 @@ public class ThreadSafeSRProcessor {
     public String getAcceleratorInfo() {
         switch (currentMode) {
             case GPU:
-                return "GPU + NNAPI (Optimized)";
+                return "GPU";
             case NPU:
                 return "NPU (Neural Processing Unit)";
             case CPU:
             default:
-                return "NNAPI/CPU (Optimized)";
+                return "CPU";
         }
+    }
+    
+    /**
+     * Get detailed information about current delegate
+     */
+    private String getCurrentDelegate() {
+        String delegateInfo = "Mode: " + currentMode.name();
+        
+        switch (currentMode) {
+            case GPU:
+                delegateInfo += ", GPU Delegate: " + (gpuDelegate != null ? "Active" : "Null");
+                break;
+            case NPU:
+                delegateInfo += ", NPU Delegate: " + (npuDelegate != null ? "Active" : "Null");
+                break;
+            case CPU:
+                delegateInfo += ", CPU Only";
+                break;
+        }
+        
+        return delegateInfo;
     }
     
     public int getModelInputWidth() {
@@ -1086,5 +1030,215 @@ public class ThreadSafeSRProcessor {
     
     public int getModelOutputHeight() {
         return actualOutputHeight;
+    }
+    
+    /**
+     * Check if the current model supports batch processing
+     * @return true if model has batch dimension > 1
+     */
+    public boolean isModelBatchCapable() {
+        if (currentInterpreter == null) return false;
+        
+        int[] inputShape = currentInterpreter.getInputTensor(0).shape();
+        int[] outputShape = currentInterpreter.getOutputTensor(0).shape();
+        
+        // Detailed shape logging for verification
+        Log.d(TAG, "=== MODEL SHAPE VERIFICATION ===");
+        Log.d(TAG, "Input tensor shape: " + java.util.Arrays.toString(inputShape));
+        Log.d(TAG, "Output tensor shape: " + java.util.Arrays.toString(outputShape));
+        Log.d(TAG, "Input tensor data type: " + currentInterpreter.getInputTensor(0).dataType());
+        Log.d(TAG, "Output tensor data type: " + currentInterpreter.getOutputTensor(0).dataType());
+        
+        boolean isBatchCapable = inputShape != null && inputShape.length >= 4 && inputShape[0] > 1;
+        Log.d(TAG, "Model batch capable: " + isBatchCapable);
+        Log.d(TAG, "Current delegate: " + getCurrentDelegate());
+        Log.d(TAG, "=================================");
+        
+        return isBatchCapable;
+    }
+    
+    /**
+     * Get the batch size supported by the current model
+     * @return batch size, or 1 if not batch capable
+     */
+    public int getModelBatchSize() {
+        if (!isModelBatchCapable()) return 1;
+        
+        int[] inputShape = currentInterpreter.getInputTensor(0).shape();
+        return inputShape[0];
+    }
+    
+    /**
+     * Process multiple images in a single batch inference call
+     * Requires a model with batch dimension > 1
+     */
+    public void processBatch(List<Bitmap> inputBitmaps, ProcessingMode forceMode, BatchInferenceCallback callback) {
+        if (!isInitialized) {
+            callback.onError("Processor not initialized");
+            return;
+        }
+        
+        if (inputBitmaps == null || inputBitmaps.isEmpty()) {
+            callback.onError("No input bitmaps provided");
+            return;
+        }
+        
+        if (!isModelBatchCapable()) {
+            callback.onError("Current model does not support batch processing");
+            return;
+        }
+        
+        int modelBatchSize = getModelBatchSize();
+        if (inputBitmaps.size() != modelBatchSize) {
+            callback.onError("Input batch size (" + inputBitmaps.size() + ") does not match model batch size (" + modelBatchSize + ")");
+            return;
+        }
+        
+        srHandler.post(() -> {
+            try {
+                Log.d(TAG, "Processing batch of " + inputBitmaps.size() + " images");
+                
+                // Switch mode if needed (same logic as single image processing)
+                if (forceMode != null && forceMode != currentMode) {
+                    switchToMode(forceMode);
+                }
+                
+                long startTime = System.currentTimeMillis();
+                List<Bitmap> results = performBatchInference(inputBitmaps);
+                long inferenceTime = System.currentTimeMillis() - startTime;
+                
+                if (results != null && results.size() == inputBitmaps.size()) {
+                    new Handler(Looper.getMainLooper()).post(() -> 
+                        callback.onResult(results, inferenceTime));
+                } else {
+                    new Handler(Looper.getMainLooper()).post(() -> 
+                        callback.onError("Batch inference failed to produce expected results"));
+                }
+                
+            } catch (Exception e) {
+                Log.e(TAG, "Exception during batch processing", e);
+                new Handler(Looper.getMainLooper()).post(() -> 
+                    callback.onError("Batch processing failed: " + e.getMessage()));
+            }
+        });
+    }
+    
+    /**
+     * Perform the actual batch inference on the SR thread
+     */
+    private List<Bitmap> performBatchInference(List<Bitmap> inputBitmaps) throws Exception {
+        if (currentInterpreter == null) {
+            throw new IllegalStateException("No interpreter available");
+        }
+        
+        int batchSize = inputBitmaps.size();
+        
+        Log.d(TAG, "=== BATCH INFERENCE PROFILING START ===");
+        Log.d(TAG, "Batch size: " + batchSize);
+        Log.d(TAG, "Current delegate: " + getCurrentDelegate());
+        
+        // Stack input bitmaps into batch tensor
+        long stackingStart = System.currentTimeMillis();
+        ByteBuffer batchInputBuffer = stackBitmapsToBatchTensor(inputBitmaps);
+        long stackingTime = System.currentTimeMillis() - stackingStart;
+        Log.d(TAG, "Tensor stacking time: " + stackingTime + "ms");
+        
+        // Prepare output buffer for batch
+        int outputSize = actualOutputWidth * actualOutputHeight * 3 * batchSize;
+        ByteBuffer batchOutputBuffer = ByteBuffer.allocateDirect(outputSize);
+        batchOutputBuffer.order(java.nio.ByteOrder.nativeOrder());
+        Log.d(TAG, "Output buffer size: " + outputSize + " bytes (" + (outputSize/1024/1024) + "MB)");
+        
+        // Run batch inference with detailed timing
+        Log.d(TAG, "=== STARTING CORE INFERENCE ===");
+        Log.d(TAG, "Running batch inference with " + batchSize + " images on " + currentMode.name());
+        
+        long memoryBefore = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
+        long inferenceStart = System.currentTimeMillis();
+        
+        currentInterpreter.run(batchInputBuffer, batchOutputBuffer);
+        
+        long inferenceEnd = System.currentTimeMillis();
+        long memoryAfter = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
+        long inferenceTime = inferenceEnd - inferenceStart;
+        
+        Log.d(TAG, "=== CORE INFERENCE COMPLETED ===");
+        Log.d(TAG, "Pure inference time: " + inferenceTime + "ms");
+        Log.d(TAG, "Memory before: " + (memoryBefore/1024/1024) + "MB");
+        Log.d(TAG, "Memory after: " + (memoryAfter/1024/1024) + "MB");
+        Log.d(TAG, "Memory delta: " + ((memoryAfter-memoryBefore)/1024/1024) + "MB");
+        Log.d(TAG, "Average time per tile: " + (inferenceTime/batchSize) + "ms");
+        
+        // Unstack output tensor back to individual bitmaps
+        long unstackingStart = System.currentTimeMillis();
+        List<Bitmap> results = unstackBatchTensorToBitmaps(batchOutputBuffer, batchSize);
+        long unstackingTime = System.currentTimeMillis() - unstackingStart;
+        
+        Log.d(TAG, "Tensor unstacking time: " + unstackingTime + "ms");
+        Log.d(TAG, "Total batch processing time: " + (System.currentTimeMillis() - stackingStart) + "ms");
+        Log.d(TAG, "=== BATCH INFERENCE PROFILING END ===");
+        
+        return results;
+    }
+    
+    /**
+     * Stack multiple bitmaps into a single batch tensor
+     */
+    private ByteBuffer stackBitmapsToBatchTensor(List<Bitmap> bitmaps) throws Exception {
+        int batchSize = bitmaps.size();
+        int tensorSize = batchSize * actualInputWidth * actualInputHeight * 3;
+        
+        ByteBuffer batchBuffer = ByteBuffer.allocateDirect(tensorSize);
+        batchBuffer.order(java.nio.ByteOrder.nativeOrder());
+        
+        Log.d(TAG, "Stacking " + batchSize + " bitmaps into batch tensor (" + tensorSize + " bytes)");
+        
+        for (int i = 0; i < batchSize; i++) {
+            Bitmap bitmap = bitmaps.get(i);
+            
+            // Ensure bitmap is correct size
+            if (bitmap.getWidth() != actualInputWidth || bitmap.getHeight() != actualInputHeight) {
+                bitmap = Bitmap.createScaledBitmap(bitmap, actualInputWidth, actualInputHeight, true);
+            }
+            
+            // Convert bitmap to tensor data and append to batch buffer
+            byte[] tensorData = BitmapConverter.bitmapToInt8Tensor(bitmap, actualInputWidth, actualInputHeight);
+            batchBuffer.put(tensorData);
+            
+            Log.v(TAG, "Stacked bitmap " + i + " into batch tensor");
+        }
+        
+        batchBuffer.rewind();
+        return batchBuffer;
+    }
+    
+    /**
+     * Unstack batch output tensor back to individual bitmaps
+     */
+    private List<Bitmap> unstackBatchTensorToBitmaps(ByteBuffer batchBuffer, int batchSize) throws Exception {
+        List<Bitmap> results = new ArrayList<>();
+        int singleOutputSize = actualOutputWidth * actualOutputHeight * 3;
+        
+        Log.d(TAG, "Unstacking batch tensor to " + batchSize + " bitmaps");
+        
+        batchBuffer.rewind();
+        for (int i = 0; i < batchSize; i++) {
+            // Extract single output tensor data
+            byte[] outputData = new byte[singleOutputSize];
+            batchBuffer.get(outputData);
+            
+            // Convert tensor data back to bitmap
+            Bitmap resultBitmap = BitmapConverter.int8TensorToBitmap(outputData, actualOutputWidth, actualOutputHeight);
+            
+            if (resultBitmap != null) {
+                results.add(resultBitmap);
+                Log.v(TAG, "Unstacked bitmap " + i + " from batch tensor");
+            } else {
+                throw new Exception("Failed to convert output tensor " + i + " to bitmap");
+            }
+        }
+        
+        Log.d(TAG, "Successfully unstacked " + results.size() + " bitmaps");
+        return results;
     }
 }

@@ -55,6 +55,37 @@ public final class MemoryUtils {
         return getCurrentMemoryInfo().availableMemoryMB < Constants.LOW_MEMORY_WARNING_MB;
     }
     
+    /**
+     * Check if there's enough memory for NPU batch processing
+     * @param requiredMemoryMB Required memory in MB for batch processing (typically 1200MB)
+     * @return true if sufficient memory is available
+     */
+    public static boolean hasEnoughMemoryForBatch(int requiredMemoryMB) {
+        MemoryInfo memInfo = getCurrentMemoryInfo();
+        boolean hasEnough = memInfo.availableMemoryMB >= requiredMemoryMB;
+        
+        Log.d(TAG, "Batch memory check - Required: " + requiredMemoryMB + "MB, Available: " + 
+              memInfo.availableMemoryMB + "MB, Sufficient: " + hasEnough);
+        
+        return hasEnough;
+    }
+    
+    /**
+     * Get memory requirement category for processing strategy
+     */
+    public static String getMemoryCategory() {
+        MemoryInfo memInfo = getCurrentMemoryInfo();
+        long availableMB = memInfo.availableMemoryMB;
+        
+        if (availableMB >= 1200) {
+            return "HIGH"; // Can use NPU batch processing
+        } else if (availableMB >= 200) {
+            return "MEDIUM"; // Can use CPU parallel tiling
+        } else {
+            return "LOW"; // Must use CPU sequential
+        }
+    }
+    
     public static boolean hasEnoughMemoryForProcessing(Bitmap bitmap, int scaleFactor) {
         if (bitmap == null) return false;
         

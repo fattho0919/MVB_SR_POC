@@ -19,7 +19,7 @@ public final class Constants {
     public static final int DEFAULT_OVERLAP_PIXELS = 32;
     public static final int MIN_VIEW_HEIGHT = 300;
     public static final int LARGE_IMAGE_PIXEL_THRESHOLD = 1_000_000;
-    public static final int MAX_CONVERSION_THREADS = 4;
+    public static final int MAX_CONVERSION_THREADS = 8;
     
     // File paths
     public static final String IMAGES_PATH = "images/";

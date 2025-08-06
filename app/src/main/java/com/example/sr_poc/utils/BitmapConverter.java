@@ -232,6 +232,43 @@ public final class BitmapConverter {
         }
     }
     
+    /**
+     * Convert bitmap to INT8 tensor data for batch processing
+     * @param bitmap Input bitmap
+     * @param width Target width
+     * @param height Target height
+     * @return INT8 tensor data in [-128, 127] range
+     */
+    public static byte[] bitmapToInt8Tensor(Bitmap bitmap, int width, int height) {
+        // Ensure bitmap is correct size
+        if (bitmap.getWidth() != width || bitmap.getHeight() != height) {
+            bitmap = Bitmap.createScaledBitmap(bitmap, width, height, true);
+        }
+        
+        int[] pixels = new int[width * height];
+        bitmap.getPixels(pixels, 0, width, 0, 0, width, height);
+        
+        // Convert ARGB pixels to INT8 tensor (RGB channels)
+        byte[] tensorData = new byte[width * height * 3];
+        convertPixelsToInt8(pixels, tensorData);
+        
+        return tensorData;
+    }
+    
+    /**
+     * Convert INT8 tensor data back to bitmap for batch processing
+     * @param tensorData INT8 tensor data in [-128, 127] range
+     * @param width Image width
+     * @param height Image height
+     * @return Bitmap created from tensor data
+     */
+    public static Bitmap int8TensorToBitmap(byte[] tensorData, int width, int height) {
+        int[] pixels = new int[width * height];
+        convertInt8ToPixels(tensorData, pixels);
+        
+        return Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888);
+    }
+    
     private static int clampToByteRange(float value) {
         // Handle both [0,1] and [-1,1] ranges for different model types
         if (value < 0) {

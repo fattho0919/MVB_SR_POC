@@ -8,6 +8,7 @@ public class PerformanceMonitor {
     
     public static class InferenceStats {
         public long inferenceTime;
+        public long estimatedTime; // Strategy selector's estimation
         public long memoryBefore;
         public long memoryAfter;
         public String accelerator;
@@ -19,16 +20,23 @@ public class PerformanceMonitor {
         
         @Override
         public String toString() {
+            String accuracyInfo = "";
+            if (estimatedTime > 0) {
+                long difference = Math.abs(inferenceTime - estimatedTime);
+                double accuracy = 100.0 * (1.0 - (double)difference / estimatedTime);
+                accuracyInfo = String.format("\nEstimated: %dms (%.1f%% accuracy)", estimatedTime, accuracy);
+            }
+            
             return String.format(
                 "Inference Stats:\n" +
-                "Time: %dms\n" +
+                "Time: %dms%s\n" +
                 "Accelerator: %s\n" +
                 "Input: %dx%d\n" +
                 "Output: %dx%d\n" +
                 "Memory Before: %dMB\n" +
                 "Memory After: %dMB\n" +
                 "Tile Processing: %s",
-                inferenceTime, accelerator, inputWidth, inputHeight, 
+                inferenceTime, accuracyInfo, accelerator, inputWidth, inputHeight, 
                 outputWidth, outputHeight, memoryBefore, memoryAfter,
                 usedTileProcessing ? "Yes" : "No"
             );
@@ -46,17 +54,25 @@ public class PerformanceMonitor {
         
         Log.d(TAG, String.format("Processing Speed: %.2f MP/s", megapixelsPerSecond));
         
-        // GPU vs CPU 效能比較參考
-        if (stats.accelerator.contains("GPU")) {
-            Log.d(TAG, "GPU acceleration active - expect 5-10x speedup vs CPU");
-        } else {
-            Log.d(TAG, "CPU processing - consider GPU acceleration for better performance");
+        // Strategy effectiveness analysis
+        if (stats.estimatedTime > 0) {
+            long difference = Math.abs(stats.inferenceTime - stats.estimatedTime);
+            double accuracy = 100.0 * (1.0 - (double)difference / stats.estimatedTime);
+            
+            Log.d(TAG, "=== Strategy Analysis ===");
+            Log.d(TAG, String.format("Estimation Accuracy: %.1f%%", accuracy));
+            if (accuracy < 80.0) {
+                Log.w(TAG, "Strategy estimation was significantly off - consider tuning");
+            } else if (accuracy > 95.0) {
+                Log.d(TAG, "Excellent strategy estimation!");
+            }
         }
         
-        // 記憶體使用分析
+        // Memory efficiency analysis
         long memoryUsed = stats.memoryAfter - stats.memoryBefore;
+        Log.d(TAG, String.format("Memory Delta: %+dMB", memoryUsed));
         if (memoryUsed > 100) {
-            Log.w(TAG, "High memory usage detected: " + memoryUsed + "MB");
+            Log.w(TAG, "High memory usage detected");
         }
         
         Log.d(TAG, "=== End Performance Statistics ===");
