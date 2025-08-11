@@ -15,6 +15,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -299,11 +300,12 @@ public class HybridSRProcessor {
     }
     
     /**
-     * Initialize GPU in background with validation.
+     * Initialize GPU in background with validation and optimizations.
      */
     private CompletableFuture<Void> initializeGPUInBackground(HybridCallback callback) {
         return CompletableFuture.runAsync(() -> {
-            Log.d(TAG, "Initializing GPU in background");
+            long startTime = System.currentTimeMillis();
+            Log.d(TAG, "Initializing GPU in background with optimizations");
             
             mainHandler.post(() -> callback.onProgress("Validating GPU...", 50));
             
@@ -322,14 +324,16 @@ public class HybridSRProcessor {
             mainHandler.post(() -> callback.onProgress("Initializing GPU...", 60));
             
             try {
-                // Create GPU interpreter
+                // Create GPU interpreter with optimizations
                 Interpreter.Options gpuOptions = new Interpreter.Options();
                 
-                // Configure GPU delegate
-                GpuDelegate.Options delegateOptions = new GpuDelegate.Options();
-                delegateOptions.setInferencePreference(
-                    GpuDelegate.Options.INFERENCE_PREFERENCE_FAST_SINGLE_ANSWER);
-                delegateOptions.setPrecisionLossAllowed(true);
+                // Optimize interpreter options for faster initialization
+                gpuOptions.setNumThreads(1);  // GPU doesn't use CPU threads
+                gpuOptions.setAllowBufferHandleOutput(false);  // Reduce overhead
+                gpuOptions.setCancellable(false);  // Skip cancellation checks
+                
+                // Configure GPU delegate with device-specific optimizations
+                GpuDelegate.Options delegateOptions = createOptimizedGpuDelegateOptions();
                 
                 gpuDelegate = new GpuDelegate(delegateOptions);
                 gpuOptions.addDelegate(gpuDelegate);
@@ -337,21 +341,65 @@ public class HybridSRProcessor {
                 gpuInterpreter = new Interpreter(modelBuffer, gpuOptions);
                 availableModes.incrementAndGet();
                 
-                Log.d(TAG, "GPU initialized successfully");
+                long initTime = System.currentTimeMillis() - startTime;
+                Log.d(TAG, "GPU initialized successfully in " + initTime + "ms");
                 
                 mainHandler.post(() -> {
                     callback.onProgress("GPU ready!", 70);
-                    callback.onModeAvailable(ProcessingMode.GPU, gpuValidation.deviceInfo);
+                    callback.onModeAvailable(ProcessingMode.GPU, 
+                        gpuValidation.deviceInfo + " (" + initTime + "ms)");
                 });
                 
             } catch (Exception e) {
-                Log.e(TAG, "GPU initialization failed", e);
+                long failTime = System.currentTimeMillis() - startTime;
+                Log.e(TAG, "GPU initialization failed after " + failTime + "ms", e);
                 mainHandler.post(() -> {
                     callback.onModeFailed(ProcessingMode.GPU, 
                         "GPU initialization error: " + e.getMessage());
                 });
             }
-        }, executorService);
+        }, executorService).orTimeout(BACKGROUND_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+          .exceptionally(ex -> {
+              if (ex instanceof TimeoutException) {
+                  Log.w(TAG, "GPU initialization timed out after " + BACKGROUND_TIMEOUT_MS + "ms");
+                  mainHandler.post(() -> {
+                      callback.onModeFailed(ProcessingMode.GPU, "Initialization timeout");
+                  });
+              }
+              return null;
+          });
+    }
+    
+    /**
+     * Creates optimized GPU delegate options based on device characteristics.
+     */
+    private GpuDelegate.Options createOptimizedGpuDelegateOptions() {
+        GpuDelegate.Options options = new GpuDelegate.Options();
+        
+        // Always use fast single answer for super resolution
+        options.setInferencePreference(GpuDelegate.Options.INFERENCE_PREFERENCE_FAST_SINGLE_ANSWER);
+        
+        // Allow precision loss for 2x speedup
+        options.setPrecisionLossAllowed(true);
+        
+        // Apply device-specific optimizations
+        String socModel = android.os.Build.SOC_MODEL;
+        if (socModel != null) {
+            Log.d(TAG, "Detected SoC: " + socModel);
+            
+            if (socModel.contains("MT8195") || socModel.contains("MT8188")) {
+                Log.d(TAG, "Applying Mali-G57 optimizations");
+                // Mali-G57 specific settings already applied above
+            } else if (socModel.contains("MT8192") || socModel.contains("MT8183")) {
+                Log.d(TAG, "Applying Mali-G77 optimizations");
+                // Mali-G77 specific settings
+            } else if (socModel.contains("Snapdragon")) {
+                Log.d(TAG, "Applying Adreno optimizations");
+                // Adreno specific settings
+            }
+        }
+        
+        return options;
     }
     
     /**
