@@ -97,7 +97,7 @@
                 android:layout_weight="1"
                 android:background="@android:color/holo_green_light"
                 android:padding="2dp"
-                android:text="GPU SR"
+                android:text="GPU 2x SR"
                 android:textColor="@android:color/white"
                 android:textSize="10sp" />
 
@@ -109,7 +109,7 @@
                 android:layout_weight="1"
                 android:layout_marginStart="1dp"
                 android:layout_marginEnd="1dp"
-                android:text="CPU SR"
+                android:text="CPU 2x SR"
                 android:textSize="10sp"
                 android:background="@android:color/holo_blue_light"
                 android:textColor="@android:color/white"
@@ -123,7 +123,7 @@
                 android:layout_weight="1"
                 android:layout_marginStart="1dp"
                 android:layout_marginEnd="1dp"
-                android:text="NPU SR"
+                android:text="NPU 2x SR"
                 android:textSize="10sp"
                 android:background="@android:color/holo_purple"
                 android:textColor="@android:color/white"

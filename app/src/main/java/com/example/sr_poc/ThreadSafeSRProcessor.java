@@ -310,10 +310,6 @@ public class ThreadSafeSRProcessor {
     private boolean initializeGpuInterpreter(ByteBuffer tfliteModel) {
         try {
             Interpreter.Options gpuOptions = new Interpreter.Options();
-//            if (configManager.isUseNnapi()) {
-//                gpuOptions.setUseNNAPI(true);
-//                Log.d(TAG, "NNAPI enabled for GPU interpreter");
-//            }
             
             if (trySetupGpu(gpuOptions)) {
                 try {
