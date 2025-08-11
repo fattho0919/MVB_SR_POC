@@ -34,6 +34,9 @@ public class ThreadSafeSRProcessor {
         GPU, CPU, NPU
     }
     
+    // Memory optimization manager
+    private MemoryOptimizedManager memoryManager;
+    
     private ConfigManager configManager;
     
     private Context context;
@@ -83,6 +86,10 @@ public class ThreadSafeSRProcessor {
     public ThreadSafeSRProcessor(Context context) {
         this.context = context;
         this.configManager = ConfigManager.getInstance(context);
+        
+        // Initialize memory optimization manager
+        memoryManager = new MemoryOptimizedManager(context);
+        memoryManager.setProcessor(this);
         
         // Initialize parallel processing executor
         int cores = Runtime.getRuntime().availableProcessors();
@@ -184,6 +191,7 @@ public class ThreadSafeSRProcessor {
             if (trySetupGpu(gpuOptions)) {
                 try {
                     gpuInterpreter = new Interpreter(tfliteModel, gpuOptions);
+                    memoryManager.onInterpreterCreated(ProcessingMode.GPU);
                     
                     long initTime = System.currentTimeMillis() - startTime;
                     Log.d(TAG, "GPU interpreter created successfully in " + initTime + "ms");
@@ -211,6 +219,7 @@ public class ThreadSafeSRProcessor {
         try {
             Log.d(TAG, "Initializing CPU interpreter with pure XNNPACK (no NNAPI)");
             cpuInterpreter = createOptimizedCpuInterpreter(tfliteModel);
+            memoryManager.onInterpreterCreated(ProcessingMode.CPU);
             
             if (actualInputWidth == 0) {
                 readModelDimensions(cpuInterpreter);
@@ -266,6 +275,7 @@ public class ThreadSafeSRProcessor {
             if (trySetupNpu(npuOptions)) {
                 try {
                     npuInterpreter = new Interpreter(tfliteModel, npuOptions);
+                    memoryManager.onInterpreterCreated(ProcessingMode.NPU);
                     
                     if (actualInputWidth == 0) {
                         readModelDimensions(npuInterpreter);
@@ -518,6 +528,9 @@ public class ThreadSafeSRProcessor {
         // 快速模式切換 - 無需重新初始化!
         ProcessingMode previousMode = currentMode;
         boolean switchSuccess = false;
+        
+        // Record usage for memory optimization
+        memoryManager.recordUsage(mode);
         
         switch (mode) {
             case GPU:
@@ -1139,8 +1152,96 @@ public class ThreadSafeSRProcessor {
     }
     
     
+    /**
+     * Check if interpreter exists for a specific mode.
+     */
+    public boolean hasInterpreter(ProcessingMode mode) {
+        switch (mode) {
+            case GPU:
+                return gpuInterpreter != null;
+            case CPU:
+                return cpuInterpreter != null;
+            case NPU:
+                return npuInterpreter != null;
+            default:
+                return false;
+        }
+    }
+    
+    /**
+     * Release a specific interpreter to free memory.
+     */
+    public void releaseInterpreter(ProcessingMode mode) {
+        if (srHandler != null) {
+            srHandler.post(() -> {
+                switch (mode) {
+                    case GPU:
+                        if (gpuInterpreter != null) {
+                            Log.d(TAG, "Releasing GPU interpreter");
+                            gpuInterpreter.close();
+                            gpuInterpreter = null;
+                            memoryManager.onInterpreterReleased(mode);
+                        }
+                        if (gpuDelegate != null) {
+                            gpuDelegate.close();
+                            gpuDelegate = null;
+                        }
+                        break;
+                        
+                    case CPU:
+                        if (cpuInterpreter != null) {
+                            Log.d(TAG, "Releasing CPU interpreter");
+                            cpuInterpreter.close();
+                            cpuInterpreter = null;
+                            memoryManager.onInterpreterReleased(mode);
+                        }
+                        break;
+                        
+                    case NPU:
+                        if (npuInterpreter != null) {
+                            Log.d(TAG, "Releasing NPU interpreter");
+                            npuInterpreter.close();
+                            npuInterpreter = null;
+                            memoryManager.onInterpreterReleased(mode);
+                        }
+                        if (npuDelegate != null) {
+                            npuDelegate.close();
+                            npuDelegate = null;
+                        }
+                        break;
+                }
+                
+                // Reset current interpreter if it was released
+                if (currentInterpreter == null || 
+                    (mode == ProcessingMode.GPU && currentMode == ProcessingMode.GPU) ||
+                    (mode == ProcessingMode.CPU && currentMode == ProcessingMode.CPU) ||
+                    (mode == ProcessingMode.NPU && currentMode == ProcessingMode.NPU)) {
+                    currentInterpreter = null;
+                }
+                
+                // Force garbage collection after releasing
+                System.gc();
+            });
+        }
+    }
+    
+    /**
+     * Release all interpreters to free maximum memory.
+     */
+    public void releaseAllInterpreters() {
+        Log.w(TAG, "Releasing all interpreters due to memory pressure");
+        releaseInterpreter(ProcessingMode.GPU);
+        releaseInterpreter(ProcessingMode.CPU);
+        releaseInterpreter(ProcessingMode.NPU);
+    }
     
     public void close() {
+        // Clean up memory manager
+        if (memoryManager != null) {
+            memoryManager.cleanup();
+            memoryManager = null;
+        }
+        
         if (srHandler != null) {
             srHandler.post(() -> {
                 if (gpuInterpreter != null) {

@@ -12,6 +12,7 @@ import android.widget.Toast;
 import android.util.Log;
 
 import androidx.appcompat.app.AppCompatActivity;
+import android.content.ComponentCallbacks2;
 
 import com.example.sr_poc.processing.ProcessingController;
 import com.example.sr_poc.utils.MemoryUtils;
@@ -19,7 +20,7 @@ import android.widget.ProgressBar;
 import android.graphics.Color;
 import androidx.appcompat.app.AlertDialog;
 
-public class MainActivity extends AppCompatActivity {
+public class MainActivity extends AppCompatActivity implements ComponentCallbacks2 {
     
     private ImageView imageView;
     private ImageComparisonView imageComparisonView;
@@ -50,6 +51,9 @@ public class MainActivity extends AppCompatActivity {
         initComponents();
         setupListeners();
         loadCurrentImage();
+        
+        // Track first interaction time
+        PerformanceMonitor.trackFirstInteraction();
     }
     
     private void initViews() {
@@ -146,6 +150,9 @@ public class MainActivity extends AppCompatActivity {
     }
     
     private void performSuperResolutionWithMode(ThreadSafeSRProcessor.ProcessingMode processingMode) {
+        // Track performance
+        long startTime = System.currentTimeMillis();
+        
         // Show memory warning if needed
         if (MemoryUtils.isLowMemory()) {
             MemoryUtils.MemoryInfo memInfo = MemoryUtils.getCurrentMemoryInfo();
@@ -185,6 +192,11 @@ public class MainActivity extends AppCompatActivity {
                     processedBitmap = resultBitmap;
                     updateComparisonView();
                     tvInferenceTime.setText(timeMessage);
+                    
+                    // Track performance
+                    long processingTime = System.currentTimeMillis() - startTime;
+                    String modeStr = processingMode != null ? processingMode.name() : "AUTO";
+                    PerformanceMonitor.trackModeUsage(modeStr, processingTime);
                 });
             }
             
@@ -573,5 +585,36 @@ public class MainActivity extends AppCompatActivity {
             })
             .setCancelable(true)
             .show();
+    }
+    
+    @Override
+    public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        Log.d("MainActivity", "onTrimMemory called with level: " + level);
+        
+        // Memory callbacks are handled by MemoryOptimizedManager in ThreadSafeSRProcessor
+        // Additional app-level handling can be added here if needed
+        
+        switch (level) {
+            case ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN:
+                // UI is hidden, could pause heavy operations
+                Log.d("MainActivity", "UI hidden - consider pausing operations");
+                break;
+                
+            case ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW:
+            case ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL:
+                // Memory is low while app is running
+                Log.w("MainActivity", "Memory running low/critical");
+                Toast.makeText(this, "Low memory - some features may be limited", 
+                    Toast.LENGTH_SHORT).show();
+                break;
+        }
+    }
+    
+    @Override
+    public void onLowMemory() {
+        super.onLowMemory();
+        Log.e("MainActivity", "onLowMemory called - critical memory situation");
+        Toast.makeText(this, "Critical memory warning!", Toast.LENGTH_LONG).show();
     }
 }
