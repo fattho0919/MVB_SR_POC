@@ -32,6 +32,9 @@ public class ConfigManager {
     private boolean useXnnpack;
     private boolean allowFp16Precision;
     private boolean useNnapi;
+    private boolean enablePureCpuMode;
+    private boolean cpuThreadAffinity;
+    private String cpuOptimizationLevel;
     private int overlapPixels;
     private double memoryThresholdPercentage;
     private int maxInputSizeWithoutTiling;
@@ -47,6 +50,12 @@ public class ConfigManager {
     private boolean enableNpu;
     private boolean allowFp16OnNpu;
     private String npuAcceleratorName;
+    private String npuExecutionPreference;
+    private boolean enableNpuPrewarming;
+    private int npuWarmupTimeoutMs;
+    private boolean cacheNpuCompilation;
+    private int npuMemoryAlignmentBytes;
+    private boolean enableNpuOperationPartitioning;
     
     private ConfigManager(Context context) {
         this.context = context.getApplicationContext();
@@ -102,6 +111,9 @@ public class ConfigManager {
         useXnnpack = processingConfig.getBoolean("use_xnnpack");
         allowFp16Precision = processingConfig.getBoolean("allow_fp16_precision");
         useNnapi = processingConfig.getBoolean("use_nnapi");
+        enablePureCpuMode = processingConfig.optBoolean("enable_pure_cpu_mode", false);
+        cpuThreadAffinity = processingConfig.optBoolean("cpu_thread_affinity", false);
+        cpuOptimizationLevel = processingConfig.optString("cpu_optimization_level", "MEDIUM");
         
         // Essential GPU parameters
         gpuInferencePreference = processingConfig.optString("gpu_inference_preference", "FAST_SINGLE_ANSWER");
@@ -113,10 +125,22 @@ public class ConfigManager {
             enableNpu = npuConfig.optBoolean("enable_npu", true);
             allowFp16OnNpu = npuConfig.optBoolean("allow_fp16_on_npu", true);
             npuAcceleratorName = npuConfig.optString("npu_accelerator_name", "");
+            npuExecutionPreference = npuConfig.optString("execution_preference", "SUSTAINED_SPEED");
+            enableNpuPrewarming = npuConfig.optBoolean("enable_npu_prewarming", true);
+            npuWarmupTimeoutMs = npuConfig.optInt("npu_warmup_timeout_ms", 3000);
+            cacheNpuCompilation = npuConfig.optBoolean("cache_npu_compilation", true);
+            npuMemoryAlignmentBytes = npuConfig.optInt("npu_memory_alignment_bytes", 64);
+            enableNpuOperationPartitioning = npuConfig.optBoolean("enable_npu_operation_partitioning", true);
         } else {
             enableNpu = true;
             allowFp16OnNpu = true;
             npuAcceleratorName = "";
+            npuExecutionPreference = "SUSTAINED_SPEED";
+            enableNpuPrewarming = true;
+            npuWarmupTimeoutMs = 3000;
+            cacheNpuCompilation = true;
+            npuMemoryAlignmentBytes = 64;
+            enableNpuOperationPartitioning = true;
         }
         
         // Tiling configuration
@@ -143,6 +167,9 @@ public class ConfigManager {
         useXnnpack = true;
         allowFp16Precision = true;
         useNnapi = true;
+        enablePureCpuMode = false;
+        cpuThreadAffinity = false;
+        cpuOptimizationLevel = "MEDIUM";
         overlapPixels = 32;
         memoryThresholdPercentage = 0.6;
         maxInputSizeWithoutTiling = 2048;
@@ -158,6 +185,12 @@ public class ConfigManager {
         enableNpu = true;
         allowFp16OnNpu = true;
         npuAcceleratorName = "";
+        npuExecutionPreference = "SUSTAINED_SPEED";
+        enableNpuPrewarming = true;
+        npuWarmupTimeoutMs = 3000;
+        cacheNpuCompilation = true;
+        npuMemoryAlignmentBytes = 64;
+        enableNpuOperationPartitioning = true;
     }
     
     // Essential getter methods
@@ -168,6 +201,9 @@ public class ConfigManager {
     public boolean isUseXnnpack() { return useXnnpack; }
     public boolean isAllowFp16Precision() { return allowFp16Precision; }
     public boolean isUseNnapi() { return useNnapi; }
+    public boolean isEnablePureCpuMode() { return enablePureCpuMode; }
+    public boolean isCpuThreadAffinity() { return cpuThreadAffinity; }
+    public String getCpuOptimizationLevel() { return cpuOptimizationLevel; }
     public int getOverlapPixels() { return overlapPixels; }
     public double getMemoryThresholdPercentage() { return memoryThresholdPercentage; }
     public int getMaxInputSizeWithoutTiling() { return maxInputSizeWithoutTiling; }
@@ -183,6 +219,12 @@ public class ConfigManager {
     public boolean isEnableNpu() { return enableNpu; }
     public boolean isAllowFp16OnNpu() { return allowFp16OnNpu; }
     public String getNpuAcceleratorName() { return npuAcceleratorName; }
+    public String getNpuExecutionPreference() { return npuExecutionPreference; }
+    public boolean isEnableNpuPrewarming() { return enableNpuPrewarming; }
+    public int getNpuWarmupTimeoutMs() { return npuWarmupTimeoutMs; }
+    public boolean isCacheNpuCompilation() { return cacheNpuCompilation; }
+    public int getNpuMemoryAlignmentBytes() { return npuMemoryAlignmentBytes; }
+    public boolean isEnableNpuOperationPartitioning() { return enableNpuOperationPartitioning; }
     
     // Simple setters
     public void setDefaultTilingEnabled(boolean enabled) {

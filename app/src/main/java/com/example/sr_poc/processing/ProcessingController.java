@@ -87,6 +87,16 @@ public class ProcessingController {
         stats.inputHeight = bitmap.getHeight();
         stats.accelerator = mode != null ? mode.name() + " (Forced)" : srProcessor.getAcceleratorInfo();
         
+        // Enhanced performance details
+        if (mode == ThreadSafeSRProcessor.ProcessingMode.CPU || srProcessor.getCurrentMode() == ThreadSafeSRProcessor.ProcessingMode.CPU) {
+            stats.pureCpuMode = configManager.isEnablePureCpuMode();
+            stats.usingNNAPI = configManager.isUseNnapi() && !stats.pureCpuMode;
+            stats.threadCount = configManager.getDefaultNumThreads();
+        } else if (mode == ThreadSafeSRProcessor.ProcessingMode.NPU || srProcessor.getCurrentMode() == ThreadSafeSRProcessor.ProcessingMode.NPU) {
+            stats.usingNNAPI = true;
+            stats.threadCount = 1; // NPU typically single-threaded
+        }
+        
         MemoryUtils.MemoryInfo memInfo = MemoryUtils.getCurrentMemoryInfo();
         stats.memoryBefore = memInfo.usedMemoryMB;
         

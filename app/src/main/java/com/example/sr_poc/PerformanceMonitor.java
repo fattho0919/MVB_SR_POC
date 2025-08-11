@@ -17,21 +17,50 @@ public class PerformanceMonitor {
         public int outputHeight;
         public boolean usedTileProcessing;
         
+        // Detailed timing breakdown
+        public long bufferAllocationTime;
+        public long inputConversionTime;
+        public long pureInferenceTime;
+        public long outputConversionTime;
+        public long bitmapCreationTime;
+        
+        // CPU/NPU specific metrics
+        public int threadCount;
+        public boolean usingNNAPI;
+        public boolean pureCpuMode;
+        
         @Override
         public String toString() {
-            return String.format(
-                "Inference Stats:\n" +
-                "Time: %dms\n" +
-                "Accelerator: %s\n" +
-                "Input: %dx%d\n" +
-                "Output: %dx%d\n" +
-                "Memory Before: %dMB\n" +
-                "Memory After: %dMB\n" +
-                "Tile Processing: %s",
-                inferenceTime, accelerator, inputWidth, inputHeight, 
-                outputWidth, outputHeight, memoryBefore, memoryAfter,
-                usedTileProcessing ? "Yes" : "No"
-            );
+            StringBuilder sb = new StringBuilder();
+            sb.append("=== DETAILED INFERENCE PERFORMANCE ===\n");
+            sb.append(String.format("Total Time: %dms\n", inferenceTime));
+            sb.append(String.format("Accelerator: %s\n", accelerator));
+            sb.append(String.format("Input: %dx%d → Output: %dx%d\n", inputWidth, inputHeight, outputWidth, outputHeight));
+            
+            // Detailed timing breakdown
+            if (bufferAllocationTime > 0 || inputConversionTime > 0 || pureInferenceTime > 0 || outputConversionTime > 0) {
+                sb.append("\n--- TIMING BREAKDOWN ---\n");
+                if (bufferAllocationTime > 0) sb.append(String.format("Buffer Allocation: %dms\n", bufferAllocationTime));
+                if (inputConversionTime > 0) sb.append(String.format("Input Conversion: %dms\n", inputConversionTime));
+                if (pureInferenceTime > 0) sb.append(String.format("Pure Inference: %dms\n", pureInferenceTime));
+                if (outputConversionTime > 0) sb.append(String.format("Output Conversion: %dms\n", outputConversionTime));
+                if (bitmapCreationTime > 0) sb.append(String.format("Bitmap Creation: %dms\n", bitmapCreationTime));
+                
+                long accountedTime = bufferAllocationTime + inputConversionTime + pureInferenceTime + outputConversionTime + bitmapCreationTime;
+                long unaccountedTime = inferenceTime - accountedTime;
+                if (unaccountedTime > 0) sb.append(String.format("Other Overhead: %dms\n", unaccountedTime));
+            }
+            
+            // CPU/NPU specific info
+            sb.append("\n--- EXECUTION DETAILS ---\n");
+            if (threadCount > 0) sb.append(String.format("Thread Count: %d\n", threadCount));
+            sb.append(String.format("Using NNAPI: %s\n", usingNNAPI ? "Yes" : "No"));
+            if (pureCpuMode) sb.append("Pure CPU Mode: Enabled\n");
+            
+            sb.append(String.format("Memory: %dMB → %dMB (%+dMB)\n", memoryBefore, memoryAfter, memoryAfter - memoryBefore));
+            sb.append(String.format("Tile Processing: %s", usedTileProcessing ? "Yes" : "No"));
+            
+            return sb.toString();
         }
     }
     

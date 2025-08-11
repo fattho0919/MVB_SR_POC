@@ -14,6 +14,9 @@
     "use_xnnpack": true,
     "allow_fp16_precision": true,
     "use_nnapi": true,
+    "enable_pure_cpu_mode": true,
+    "cpu_thread_affinity": true,
+    "cpu_optimization_level": "HIGH",
     "gpu_inference_preference": "FAST_SINGLE_ANSWER",
     "gpu_precision_loss_allowed": true,
     "gpu_wait_type": "PASSIVE",
@@ -25,7 +28,13 @@
     "enable_npu": true,
     "allow_fp16_on_npu": true,
     "npu_accelerator_name": "",
-    "use_npu_for_quantized": true
+    "use_npu_for_quantized": true,
+    "execution_preference": "SUSTAINED_SPEED",
+    "enable_npu_prewarming": true,
+    "npu_warmup_timeout_ms": 3000,
+    "cache_npu_compilation": true,
+    "npu_memory_alignment_bytes": 64,
+    "enable_npu_operation_partitioning": true
   },
   "tiling": {
     "overlap_pixels": 32,
