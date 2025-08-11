@@ -271,7 +271,7 @@ public class TileProcessor {
         int width = bitmap.getWidth();
         int height = bitmap.getHeight();
         
-        // 計算超解析度後的記憶體需求（假設最多4倍放大）
+        // 計算超解析度後的記憶體需求（假設最多4倍放大，這是舊版的硬編碼方法）
         long outputPixels = (long) width * height * 16; // 4x寬 * 4x高 = 16倍像素
         long estimatedMemoryMB = outputPixels * 4 / (1024 * 1024); // ARGB每像素4字節
         

@@ -1,12 +1,13 @@
 {
   "model": {
-    "default_model_path": "models/DSCF_int8.tflite",
+    "default_model_path": "models/DSCF_720p_x2_int8.tflite",
     "alternative_models": [
       "models/DSCF_float32.tflite",
       "models/DSCF_float16.tflite",
-      "models/DSCF_int8.tflite"
+      "models/DSCF_int8.tflite",
+      "models/DSCF_720p_x2_int8.tflite"
     ],
-    "expected_scale_factor": 4,
+    "expected_scale_factor": 2,
     "channels": 3
   },
   "processing": {

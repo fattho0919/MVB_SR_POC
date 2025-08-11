@@ -125,9 +125,6 @@ public class MainActivity extends AppCompatActivity {
         });
     }
     
-    private void performSuperResolution() {
-        performSuperResolutionWithMode(null);
-    }
     
     private void switchToNextImage() {
         imageManager.switchToNext();
