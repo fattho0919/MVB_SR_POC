@@ -31,8 +31,6 @@ public class TileProcessor {
         // 計算輸出倍率
         this.outputScale = Math.max(outputWidth / inputWidth, outputHeight / inputHeight);
         
-        Log.d(TAG, "TileProcessor initialized - Tile size: " + tileSize + 
-                  ", Output scale: " + outputScale + "x, Overlap: " + overlapPixels + "px (default)");
     }
     
     public TileProcessor(ThreadSafeSRProcessor processor, ConfigManager configManager) {
@@ -54,8 +52,6 @@ public class TileProcessor {
         // 計算輸出倍率
         this.outputScale = Math.max(outputWidth / inputWidth, outputHeight / inputHeight);
         
-        Log.d(TAG, "TileProcessor initialized - Tile size: " + tileSize + 
-                  ", Output scale: " + outputScale + "x, Overlap: " + overlapPixels + "px");
     }
     
     /**
@@ -70,7 +66,6 @@ public class TileProcessor {
         int inputWidth = inputBitmap.getWidth();
         int inputHeight = inputBitmap.getHeight();
         
-        Log.d(TAG, "Processing " + inputWidth + "x" + inputHeight + " image by tiles");
         
         // 計算有效的tile步長 (去除overlap)
         int effectiveTileStep = tileSize - overlapPixels;
@@ -79,7 +74,6 @@ public class TileProcessor {
         int tilesX = (int) Math.ceil((double) inputWidth / effectiveTileStep);
         int tilesY = (int) Math.ceil((double) inputHeight / effectiveTileStep);
         
-        Log.d(TAG, "Will process " + tilesX + "x" + tilesY + " tiles");
         
         // 計算正確的輸出尺寸
         int effectiveOutputStep = effectiveTileStep * outputScale;
@@ -89,7 +83,6 @@ public class TileProcessor {
         int outputWidth = (tilesX - 1) * effectiveOutputStep + (lastTileInputX * outputScale);
         int outputHeight = (tilesY - 1) * effectiveOutputStep + (lastTileInputY * outputScale);
         
-        Log.d(TAG, "Calculated output size: " + outputWidth + "x" + outputHeight);
         
         Bitmap resultBitmap = Bitmap.createBitmap(outputWidth, outputHeight, Bitmap.Config.ARGB_8888);
         android.graphics.Canvas canvas = new android.graphics.Canvas(resultBitmap);
@@ -111,9 +104,6 @@ public class TileProcessor {
                 int tileWidth = tileRight - tileLeft;
                 int tileHeight = tileBottom - tileTop;
                 
-                Log.d(TAG, "Processing tile (" + x + "," + y + "): " + 
-                          tileLeft + "," + tileTop + " to " + tileRight + "," + tileBottom +
-                          " size: " + tileWidth + "x" + tileHeight);
                 
                 // 提取分塊，確保符合模型輸入尺寸
                 Bitmap tileBitmap;
@@ -257,8 +247,6 @@ public class TileProcessor {
                 long tileTime = System.currentTimeMillis() - tileStartTime;
                 totalTileTime += tileTime;
                 
-                Log.d(TAG, "Tile (" + x + "," + y + ") completed in " + tileTime + "ms");
-                
                 // 更新進度
                 if (callback != null) {
                     callback.onProgress(processedTiles, totalTiles);
@@ -266,9 +254,6 @@ public class TileProcessor {
             }
         }
         
-        Log.d(TAG, "Tile processing completed: " + processedTiles + "/" + totalTiles + " tiles successful");
-        Log.d(TAG, "Total tile processing time: " + totalTileTime + "ms, Average: " + (totalTileTime/Math.max(1,processedTiles)) + "ms/tile");
-        Log.d(TAG, "Final result bitmap size: " + resultBitmap.getWidth() + "x" + resultBitmap.getHeight());
         
         return resultBitmap;
     }
@@ -290,8 +275,6 @@ public class TileProcessor {
         long outputPixels = (long) width * height * 16; // 4x寬 * 4x高 = 16倍像素
         long estimatedMemoryMB = outputPixels * 4 / (1024 * 1024); // ARGB每像素4字節
         
-        Log.d(TAG, "Input: " + width + "x" + height + 
-                   ", estimated output memory: " + estimatedMemoryMB + "MB");
         
         // 動態閾值：基於可用記憶體和圖片大小
         Runtime runtime = Runtime.getRuntime();
@@ -303,7 +286,6 @@ public class TileProcessor {
         boolean useTiling = estimatedMemoryMB > (availableMemoryMB * 0.6) || 
                            width > 2048 || height > 2048;
         
-        Log.d(TAG, "Available memory: " + availableMemoryMB + "MB, Should use tile processing: " + useTiling);
         return useTiling;
     }
     
@@ -321,8 +303,6 @@ public class TileProcessor {
         long outputPixels = (long) width * height * scaleFactor * scaleFactor;
         long estimatedMemoryMB = outputPixels * 4 / (1024 * 1024); // ARGB每像素4字節
         
-        Log.d(TAG, "Input: " + width + "x" + height + 
-                   ", estimated output memory: " + estimatedMemoryMB + "MB");
         
         // 使用配置中的閾值
         double memoryThreshold = config.getMemoryThresholdPercentage();
@@ -340,11 +320,6 @@ public class TileProcessor {
                            width > maxSizeWithoutTiling || height > maxSizeWithoutTiling ||
                            estimatedMemoryMB > forceTilingAboveMb;
         
-        Log.d(TAG, "Available memory: " + availableMemoryMB + "MB, " +
-                   "Threshold: " + (int)(memoryThreshold * 100) + "%, " +
-                   "Max size: " + maxSizeWithoutTiling + "px, " +
-                   "Force above: " + forceTilingAboveMb + "MB, " +
-                   "Should use tile processing: " + useTiling);
         return useTiling;
     }
 }

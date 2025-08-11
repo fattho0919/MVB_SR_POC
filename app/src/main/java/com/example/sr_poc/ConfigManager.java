@@ -24,9 +24,8 @@ public class ConfigManager {
     private JSONObject config;
     private Context context;
     
-    // Cached values for performance
+    // Essential cached values
     private String defaultModelPath;
-    private List<String> alternativeModels;
     private int expectedScaleFactor;
     private int channels;
     private int defaultNumThreads;
@@ -38,29 +37,16 @@ public class ConfigManager {
     private int maxInputSizeWithoutTiling;
     private int forceTilingAboveMb;
     private int lowMemoryWarningMb;
-    private boolean gcAfterInference;
-    private boolean enableMemoryLogging;
     private boolean defaultTilingEnabled;
-    private boolean showDetailedTiming;
-    private boolean showMemoryStats;
-    private boolean enableVerboseLogging;
-    private boolean logModelShapes;
-    private boolean logPerformanceStats;
-    private boolean enableBufferValidation;
     
     // GPU optimization parameters
     private String gpuInferencePreference;
     private boolean gpuPrecisionLossAllowed;
-    private String gpuWaitType;
-    private String gpuBackend;
-    private boolean enableQuantizedInference;
-    private boolean experimentalGpuOptimizations;
     
     // NPU optimization parameters
     private boolean enableNpu;
     private boolean allowFp16OnNpu;
     private String npuAcceleratorName;
-    private boolean useNpuForQuantized;
     
     private ConfigManager(Context context) {
         this.context = context.getApplicationContext();
@@ -109,12 +95,6 @@ public class ConfigManager {
         expectedScaleFactor = modelConfig.getInt("expected_scale_factor");
         channels = modelConfig.getInt("channels");
         
-        // Alternative models
-        alternativeModels = new ArrayList<>();
-        JSONArray altModelsArray = modelConfig.getJSONArray("alternative_models");
-        for (int i = 0; i < altModelsArray.length(); i++) {
-            alternativeModels.add(altModelsArray.getString(i));
-        }
         
         // Processing configuration
         JSONObject processingConfig = config.getJSONObject("processing");
@@ -123,27 +103,20 @@ public class ConfigManager {
         allowFp16Precision = processingConfig.getBoolean("allow_fp16_precision");
         useNnapi = processingConfig.getBoolean("use_nnapi");
         
-        // GPU optimization parameters
+        // Essential GPU parameters
         gpuInferencePreference = processingConfig.optString("gpu_inference_preference", "FAST_SINGLE_ANSWER");
         gpuPrecisionLossAllowed = processingConfig.optBoolean("gpu_precision_loss_allowed", true);
-        gpuWaitType = processingConfig.optString("gpu_wait_type", "PASSIVE");
-        gpuBackend = processingConfig.optString("gpu_backend", "OPENCL");
-        enableQuantizedInference = processingConfig.optBoolean("enable_quantized_inference", false);
-        experimentalGpuOptimizations = processingConfig.optBoolean("experimental_gpu_optimizations", true);
         
-        // NPU optimization parameters
+        // Essential NPU parameters
         JSONObject npuConfig = config.optJSONObject("npu");
         if (npuConfig != null) {
             enableNpu = npuConfig.optBoolean("enable_npu", true);
             allowFp16OnNpu = npuConfig.optBoolean("allow_fp16_on_npu", true);
             npuAcceleratorName = npuConfig.optString("npu_accelerator_name", "");
-            useNpuForQuantized = npuConfig.optBoolean("use_npu_for_quantized", true);
         } else {
-            // Default NPU values if config section doesn't exist
             enableNpu = true;
             allowFp16OnNpu = true;
             npuAcceleratorName = "";
-            useNpuForQuantized = true;
         }
         
         // Tiling configuration
@@ -153,30 +126,17 @@ public class ConfigManager {
         maxInputSizeWithoutTiling = tilingConfig.getInt("max_input_size_without_tiling");
         forceTilingAboveMb = tilingConfig.getInt("force_tiling_above_mb");
         
-        // Memory configuration
+        // Memory and UI configuration
         JSONObject memoryConfig = config.getJSONObject("memory");
         lowMemoryWarningMb = memoryConfig.getInt("low_memory_warning_mb");
-        gcAfterInference = memoryConfig.getBoolean("gc_after_inference");
-        enableMemoryLogging = memoryConfig.getBoolean("enable_memory_logging");
         
-        // UI configuration
         JSONObject uiConfig = config.getJSONObject("ui");
         defaultTilingEnabled = uiConfig.getBoolean("default_tiling_enabled");
-        showDetailedTiming = uiConfig.getBoolean("show_detailed_timing");
-        showMemoryStats = uiConfig.getBoolean("show_memory_stats");
-        
-        // Debugging configuration
-        JSONObject debugConfig = config.getJSONObject("debugging");
-        enableVerboseLogging = debugConfig.getBoolean("enable_verbose_logging");
-        logModelShapes = debugConfig.getBoolean("log_model_shapes");
-        logPerformanceStats = debugConfig.getBoolean("log_performance_stats");
-        enableBufferValidation = debugConfig.getBoolean("enable_buffer_validation");
     }
     
     private void useDefaultValues() {
-        // Fallback default values
+        // Essential default values
         defaultModelPath = "models/DSCF_float32.tflite";
-        alternativeModels = new ArrayList<>();
         expectedScaleFactor = 4;
         channels = 3;
         defaultNumThreads = 4;
@@ -188,34 +148,20 @@ public class ConfigManager {
         maxInputSizeWithoutTiling = 2048;
         forceTilingAboveMb = 500;
         lowMemoryWarningMb = 100;
-        gcAfterInference = false;
-        enableMemoryLogging = true;
         defaultTilingEnabled = true;
-        showDetailedTiming = true;
-        showMemoryStats = true;
-        enableVerboseLogging = false;
-        logModelShapes = true;
-        logPerformanceStats = true;
-        enableBufferValidation = false;
         
-        // GPU optimization defaults
+        // GPU defaults
         gpuInferencePreference = "FAST_SINGLE_ANSWER";
         gpuPrecisionLossAllowed = true;
-        gpuWaitType = "PASSIVE";
-        gpuBackend = "OPENCL";
-        enableQuantizedInference = false;
-        experimentalGpuOptimizations = true;
         
-        // NPU optimization defaults
+        // NPU defaults
         enableNpu = true;
         allowFp16OnNpu = true;
         npuAcceleratorName = "";
-        useNpuForQuantized = true;
     }
     
-    // Getter methods for cached values
+    // Essential getter methods
     public String getDefaultModelPath() { return defaultModelPath; }
-    public List<String> getAlternativeModels() { return alternativeModels; }
     public int getExpectedScaleFactor() { return expectedScaleFactor; }
     public int getChannels() { return channels; }
     public int getDefaultNumThreads() { return defaultNumThreads; }
@@ -227,88 +173,25 @@ public class ConfigManager {
     public int getMaxInputSizeWithoutTiling() { return maxInputSizeWithoutTiling; }
     public int getForceTilingAboveMb() { return forceTilingAboveMb; }
     public int getLowMemoryWarningMb() { return lowMemoryWarningMb; }
-    public boolean isGcAfterInference() { return gcAfterInference; }
-    public boolean isEnableMemoryLogging() { return enableMemoryLogging; }
     public boolean isDefaultTilingEnabled() { return defaultTilingEnabled; }
-    public boolean isShowDetailedTiming() { return showDetailedTiming; }
-    public boolean isShowMemoryStats() { return showMemoryStats; }
-    public boolean isEnableVerboseLogging() { return enableVerboseLogging; }
-    public boolean isLogModelShapes() { return logModelShapes; }
-    public boolean isLogPerformanceStats() { return logPerformanceStats; }
-    public boolean isEnableBufferValidation() { return enableBufferValidation; }
     
-    // GPU optimization getters
+    // GPU getters
     public String getGpuInferencePreference() { return gpuInferencePreference; }
     public boolean isGpuPrecisionLossAllowed() { return gpuPrecisionLossAllowed; }
-    public String getGpuWaitType() { return gpuWaitType; }
-    public String getGpuBackend() { return gpuBackend; }
-    public boolean isEnableQuantizedInference() { return enableQuantizedInference; }
-    public boolean isExperimentalGpuOptimizations() { return experimentalGpuOptimizations; }
     
-    // NPU optimization getters
+    // NPU getters
     public boolean isEnableNpu() { return enableNpu; }
     public boolean isAllowFp16OnNpu() { return allowFp16OnNpu; }
     public String getNpuAcceleratorName() { return npuAcceleratorName; }
-    public boolean isUseNpuForQuantized() { return useNpuForQuantized; }
     
-    // Runtime configuration update methods
+    // Simple setters
     public void setDefaultTilingEnabled(boolean enabled) {
         this.defaultTilingEnabled = enabled;
-        updateConfigValue("ui", "default_tiling_enabled", enabled);
     }
     
-    public void setEnableVerboseLogging(boolean enabled) {
-        this.enableVerboseLogging = enabled;
-        updateConfigValue("debugging", "enable_verbose_logging", enabled);
-    }
-    
-    public void setMemoryThresholdPercentage(double percentage) {
-        this.memoryThresholdPercentage = percentage;
-        updateConfigValue("tiling", "memory_threshold_percentage", percentage);
-    }
-    
-    private void updateConfigValue(String section, String key, Object value) {
-        try {
-            if (config != null) {
-                JSONObject sectionObj = config.getJSONObject(section);
-                if (value instanceof Boolean) {
-                    sectionObj.put(key, (Boolean) value);
-                } else if (value instanceof Double) {
-                    sectionObj.put(key, (Double) value);
-                } else if (value instanceof Integer) {
-                    sectionObj.put(key, (Integer) value);
-                } else if (value instanceof String) {
-                    sectionObj.put(key, (String) value);
-                }
-                Log.d(TAG, "Updated config: " + section + "." + key + " = " + value);
-            }
-        } catch (JSONException e) {
-            Log.e(TAG, "Failed to update config value: " + section + "." + key, e);
-        }
-    }
-    
-    public void reloadConfig() {
-        Log.d(TAG, "Reloading configuration...");
-        loadConfig();
-    }
     
     public String getConfigSummary() {
-        StringBuilder summary = new StringBuilder();
-        summary.append("SuperResolution Configuration Summary:\n");
-        summary.append("  Model: ").append(defaultModelPath).append("\n");
-        summary.append("  Scale Factor: ").append(expectedScaleFactor).append("x\n");
-        summary.append("  Threads: ").append(defaultNumThreads).append("\n");
-        summary.append("  NNAPI: ").append(useNnapi ? "✓" : "✗").append("\n");
-        summary.append("  XNNPACK: ").append(useXnnpack ? "✓" : "✗").append("\n");
-        summary.append("  GPU Preference: ").append(gpuInferencePreference).append("\n");
-        summary.append("  Quantized Inference: ").append(enableQuantizedInference ? "✓" : "✗").append("\n");
-        summary.append("  Experimental GPU: ").append(experimentalGpuOptimizations ? "✓" : "✗").append("\n");
-        summary.append("  NPU Enabled: ").append(enableNpu ? "✓" : "✗").append("\n");
-        summary.append("  NPU FP16: ").append(allowFp16OnNpu ? "✓" : "✗").append("\n");
-        summary.append("  Tiling Overlap: ").append(overlapPixels).append("px\n");
-        summary.append("  Memory Threshold: ").append((int)(memoryThresholdPercentage * 100)).append("%\n");
-        summary.append("  Max Size (no tiling): ").append(maxInputSizeWithoutTiling).append("px\n");
-        summary.append("  Default Tiling: ").append(defaultTilingEnabled ? "✓" : "✗").append("\n");
-        return summary.toString();
+        return "Model: " + defaultModelPath + ", Scale: " + expectedScaleFactor + "x, " +
+               "Threads: " + defaultNumThreads + ", NPU: " + (enableNpu ? "On" : "Off");
     }
 }
