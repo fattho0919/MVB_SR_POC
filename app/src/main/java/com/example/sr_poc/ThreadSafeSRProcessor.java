@@ -86,7 +86,6 @@ public class ThreadSafeSRProcessor {
         // Initialize parallel processing executor
         int cores = Runtime.getRuntime().availableProcessors();
         conversionExecutor = Executors.newFixedThreadPool(Math.min(cores, Constants.MAX_CONVERSION_THREADS));
-        Log.d(TAG, "Initialized conversion executor with " + Math.min(cores, Constants.MAX_CONVERSION_THREADS) + " threads");
         
         initializeThread();
     }
@@ -104,12 +103,10 @@ public class ThreadSafeSRProcessor {
     public void initialize(InitCallback callback) {
         srHandler.post(() -> {
             try {
-                Log.d(TAG, "Initializing SR processor with tri-mode setup (GPU/CPU/NPU)");
                 long initStartTime = System.currentTimeMillis();
                 
                 String modelPath = configManager.getDefaultModelPath();
                 ByteBuffer tfliteModel = FileUtil.loadMappedFile(context, modelPath);
-                Log.d(TAG, "Model loaded: " + modelPath + " (" + (tfliteModel.capacity() / 1024) + "KB)");
                 
                 // 初始化GPU解釋器
                 boolean gpuSuccess = initializeGpuInterpreter(tfliteModel);
@@ -124,19 +121,15 @@ public class ThreadSafeSRProcessor {
                     throw new RuntimeException("Failed to initialize all interpreters (GPU, CPU, NPU)");
                 }
                 
-                // 默認優先級: NPU -> GPU -> CPU
                 if (npuSuccess && configManager.isEnableNpu()) {
                     currentInterpreter = npuInterpreter;
                     currentMode = ProcessingMode.NPU;
-                    Log.d(TAG, "Default mode: NPU");
                 } else if (gpuSuccess) {
                     currentInterpreter = gpuInterpreter;
                     currentMode = ProcessingMode.GPU;
-                    Log.d(TAG, "Default mode: GPU + NNAPI");
                 } else {
                     currentInterpreter = cpuInterpreter;
                     currentMode = ProcessingMode.CPU;
-                    Log.d(TAG, "Default mode: NNAPI/CPU");
                 }
                 
                 allocateBuffers();
@@ -145,9 +138,7 @@ public class ThreadSafeSRProcessor {
                 isInitialized = true;
                 
                 long initTime = System.currentTimeMillis() - initStartTime;
-                String message = String.format("Initialized tri-mode in %dms. GPU: %s, CPU: %s, NPU: %s", 
-                    initTime, gpuSuccess ? "✓" : "✗", cpuSuccess ? "✓" : "✗", npuSuccess ? "✓" : "✗");
-                Log.d(TAG, message);
+                String message = String.format("Initialized in %dms", initTime);
                 callback.onInitialized(true, message);
                 
             } catch (Exception e) {
@@ -160,7 +151,6 @@ public class ThreadSafeSRProcessor {
     
     private boolean initializeGpuInterpreter(ByteBuffer tfliteModel) {
         try {
-            Log.d(TAG, "Initializing GPU interpreter");
             Interpreter.Options gpuOptions = new Interpreter.Options();
 //            if (configManager.isUseNnapi()) {
 //                gpuOptions.setUseNNAPI(true);
@@ -170,12 +160,10 @@ public class ThreadSafeSRProcessor {
             if (trySetupGpu(gpuOptions)) {
                 try {
                     gpuInterpreter = new Interpreter(tfliteModel, gpuOptions);
-                    Log.d(TAG, "GPU interpreter created successfully");
-                    
+                            
                     readModelDimensions(gpuInterpreter);
                     return true;
                 } catch (Exception e) {
-                    Log.e(TAG, "Failed to create GPU interpreter: " + e.getMessage());
                     if (gpuDelegate != null) {
                         gpuDelegate.close();
                         gpuDelegate = null;
@@ -190,7 +178,6 @@ public class ThreadSafeSRProcessor {
     
     private boolean initializeCpuInterpreter(ByteBuffer tfliteModel) {
         try {
-            Log.d(TAG, "Initializing CPU interpreter");
             Interpreter.Options cpuOptions = new Interpreter.Options();
             if (configManager.isUseNnapi()) {
                 cpuOptions.setUseNNAPI(true);
@@ -213,7 +200,6 @@ public class ThreadSafeSRProcessor {
             if (!configManager.isEnableNpu()) {
                 return false;
             }
-            Log.d(TAG, "Initializing NPU interpreter");
             Interpreter.Options npuOptions = new Interpreter.Options();
             
             if (trySetupNpu(npuOptions)) {
@@ -225,7 +211,6 @@ public class ThreadSafeSRProcessor {
                     }
                     return true;
                 } catch (Exception e) {
-                    Log.e(TAG, "Failed to create NPU interpreter: " + e.getMessage());
                     if (npuDelegate != null) {
                         npuDelegate.close();
                         npuDelegate = null;
@@ -244,7 +229,6 @@ public class ThreadSafeSRProcessor {
             configureNpuDelegateOptions(npuOptions);
             npuDelegate = new NnApiDelegate(npuOptions);
             options.addDelegate(npuDelegate);
-            Log.d(TAG, "NPU delegate configured");
             return true;
             
         } catch (Exception e) {
@@ -269,8 +253,6 @@ public class ThreadSafeSRProcessor {
             int[] inputShape = interpreter.getInputTensor(0).shape();
             int[] outputShape = interpreter.getOutputTensor(0).shape();
             
-            Log.d(TAG, "Reading model dimensions - Input: " + java.util.Arrays.toString(inputShape) + 
-                      ", Output: " + java.util.Arrays.toString(outputShape));
             
             // 解析輸入尺寸 (NHWC格式)
             if (inputShape.length >= 3) {
@@ -288,18 +270,7 @@ public class ThreadSafeSRProcessor {
                 throw new RuntimeException("Invalid output shape: " + java.util.Arrays.toString(outputShape));
             }
             
-            // 驗證超解析度倍率是否符合配置
-            int expectedScaleFactor = configManager.getExpectedScaleFactor();
-            int expectedOutputWidth = actualInputWidth * expectedScaleFactor;
-            int expectedOutputHeight = actualInputHeight * expectedScaleFactor;
-            if (actualOutputWidth != expectedOutputWidth || actualOutputHeight != expectedOutputHeight) {
-                Log.w(TAG, "Warning: Expected " + expectedScaleFactor + "x super resolution (" + 
-                          expectedOutputWidth + "x" + expectedOutputHeight + 
-                          ") but got (" + actualOutputWidth + "x" + actualOutputHeight + ")");
-            }
             
-            Log.d(TAG, "Model: " + actualInputWidth + "x" + actualInputHeight + 
-                      " -> " + actualOutputWidth + "x" + actualOutputHeight);
                       
         } catch (Exception e) {
             Log.e(TAG, "Failed to read model dimensions", e);
@@ -312,13 +283,9 @@ public class ThreadSafeSRProcessor {
             GpuDelegate.Options gpuOptions = new GpuDelegate.Options();
             configureGpuDelegateOptions(gpuOptions);
             
-            if (android.os.Build.SOC_MODEL != null && android.os.Build.SOC_MODEL.contains("MT8195")) {
-                applyMaliOptimizations(gpuOptions);
-            }
             
             gpuDelegate = new GpuDelegate(gpuOptions);
             options.addDelegate(gpuDelegate);
-            Log.d(TAG, "GPU delegate configured");
             return true;
             
         } catch (Exception e) {
@@ -351,9 +318,6 @@ public class ThreadSafeSRProcessor {
         gpuOptions.setPrecisionLossAllowed(configManager.isGpuPrecisionLossAllowed());
     }
     
-    private void applyMaliOptimizations(GpuDelegate.Options gpuOptions) {
-        // Mali-G57 optimizations (placeholder for future enhancements)
-    }
     
     private void setupCpu(Interpreter.Options options) {
         // 使用配置文件中的線程數
@@ -368,9 +332,8 @@ public class ThreadSafeSRProcessor {
         if (configManager.isUseXnnpack()) {
             try {
                 options.setUseXNNPACK(true);
-                Log.d(TAG, "CPU configured with " + numThreads + " threads and XNNPACK");
             } catch (Exception e) {
-                Log.w(TAG, "XNNPACK not available");
+                // XNNPACK not available
             }
         }
     }
@@ -394,7 +357,6 @@ public class ThreadSafeSRProcessor {
             cachedOutputFloatArray = new float[outputPixels * 3];
             cachedOutputByteArray = new byte[outputPixels * 3];
             
-            Log.d(TAG, "Cached arrays allocated - Input: " + inputPixels + ", Output: " + outputPixels + " pixels");
         } catch (OutOfMemoryError e) {
             Log.e(TAG, "Out of memory allocating cached arrays", e);
             throw new RuntimeException("Insufficient memory for cached arrays", e);
@@ -408,31 +370,21 @@ public class ThreadSafeSRProcessor {
                 if (gpuInterpreter != null) {
                     currentInterpreter = gpuInterpreter;
                     currentMode = ProcessingMode.GPU;
-                    Log.d(TAG, "Switched to GPU mode (instant)");
-                } else {
-                    Log.w(TAG, "GPU interpreter not available, keeping current mode");
                 }
                 break;
             case CPU:
                 if (cpuInterpreter != null) {
                     currentInterpreter = cpuInterpreter;
                     currentMode = ProcessingMode.CPU;
-                    Log.d(TAG, "Switched to CPU mode (instant)");
-                } else {
-                    Log.w(TAG, "CPU interpreter not available, keeping current mode");
                 }
                 break;
             case NPU:
                 if (npuInterpreter != null) {
                     currentInterpreter = npuInterpreter;
                     currentMode = ProcessingMode.NPU;
-                    Log.d(TAG, "Switched to NPU mode (instant)");
-                } else {
-                    Log.w(TAG, "NPU interpreter not available, keeping current mode");
                 }
                 break;
             default:
-                Log.w(TAG, "Unknown processing mode, keeping current mode");
         }
     }
     
@@ -448,10 +400,6 @@ public class ThreadSafeSRProcessor {
         DataType inputDataType = currentInterpreter.getInputTensor(0).dataType();
         DataType outputDataType = currentInterpreter.getOutputTensor(0).dataType();
         
-        Log.d(TAG, "Model input shape: " + java.util.Arrays.toString(inputShape));
-        Log.d(TAG, "Model output shape: " + java.util.Arrays.toString(outputShape));
-        Log.d(TAG, "Input data type: " + inputDataType);
-        Log.d(TAG, "Output data type: " + outputDataType);
         
         // 計算所需緩衝區大小
         long inputElements = 1;
@@ -469,8 +417,6 @@ public class ThreadSafeSRProcessor {
         long requiredInputBytes = inputElements * inputBytesPerElement;
         long requiredOutputBytes = outputElements * outputBytesPerElement;
         
-        Log.d(TAG, "Required input buffer: " + requiredInputBytes + " bytes (" + inputElements + " elements)");
-        Log.d(TAG, "Required output buffer: " + requiredOutputBytes + " bytes (" + outputElements + " elements)");
         
         // 檢查是否需要重新分配輸入緩衝區
         boolean needNewInputBuffer;
@@ -493,38 +439,27 @@ public class ThreadSafeSRProcessor {
         }
         
         if (needNewInputBuffer) {
-            Log.d(TAG, "Reallocating input buffer");
             if (inputDataType == DataType.INT8) {
-                // Use direct ByteBuffer for INT8 since TensorBuffer doesn't support it
                 inputByteBuffer = ByteBuffer.allocateDirect((int) requiredInputBytes);
                 inputByteBuffer.order(java.nio.ByteOrder.nativeOrder());
-                inputBuffer = null; // Clear TensorBuffer
-                Log.d(TAG, "New input ByteBuffer capacity: " + inputByteBuffer.capacity() + " bytes");
+                inputBuffer = null;
             } else {
                 inputBuffer = TensorBuffer.createFixedSize(inputShape, inputDataType);
-                inputByteBuffer = null; // Clear direct buffer
-                Log.d(TAG, "New input TensorBuffer capacity: " + inputBuffer.getBuffer().capacity() + " bytes");
+                inputByteBuffer = null;
             }
         }
         
         if (needNewOutputBuffer) {
-            Log.d(TAG, "Reallocating output buffer");
             if (outputDataType == DataType.INT8) {
-                // Use direct ByteBuffer for INT8 since TensorBuffer doesn't support it
                 outputByteBuffer = ByteBuffer.allocateDirect((int) requiredOutputBytes);
                 outputByteBuffer.order(java.nio.ByteOrder.nativeOrder());
-                outputBuffer = null; // Clear TensorBuffer
-                Log.d(TAG, "New output ByteBuffer capacity: " + outputByteBuffer.capacity() + " bytes");
+                outputBuffer = null;
             } else {
                 outputBuffer = TensorBuffer.createFixedSize(outputShape, outputDataType);
-                outputByteBuffer = null; // Clear direct buffer
-                Log.d(TAG, "New output TensorBuffer capacity: " + outputBuffer.getBuffer().capacity() + " bytes");
+                outputByteBuffer = null;
             }
         }
         
-        if (!needNewInputBuffer && !needNewOutputBuffer) {
-            Log.d(TAG, "Buffers are already correct size");
-        }
     }
     
     public interface InferenceCallback {
@@ -556,134 +491,70 @@ public class ThreadSafeSRProcessor {
         
         srHandler.post(() -> {
             try {
-                Log.d(TAG, "Processing image: " + inputBitmap.getWidth() + "x" + inputBitmap.getHeight());
-                
-                // 快速模式切換 - 無延遲!
+
                 if (forceMode != null && forceMode != currentMode) {
-                    long switchStart = System.currentTimeMillis();
                     switchToMode(forceMode);
-                    long switchTime = System.currentTimeMillis() - switchStart;
-                    Log.d(TAG, "Mode switch completed in " + switchTime + "ms");
                 }
-                
+
                 // 確保輸入尺寸符合模型要求
                 Bitmap resizedInput;
                 if (inputBitmap.getWidth() != actualInputWidth || inputBitmap.getHeight() != actualInputHeight) {
                     resizedInput = Bitmap.createScaledBitmap(inputBitmap, actualInputWidth, actualInputHeight, true);
-                    Log.d(TAG, "Resized input to " + actualInputWidth + "x" + actualInputHeight);
                 } else {
                     resizedInput = inputBitmap;
                 }
-                
+
                 long totalStartTime = System.currentTimeMillis();
-                
+
                 ensureBuffersAreCorrectSize();
                 convertBitmapToBuffer(resizedInput);
-                
+
                 // Rewind the appropriate buffers
                 if (inputBuffer != null) {
                     inputBuffer.getBuffer().rewind();
                 } else if (inputByteBuffer != null) {
                     inputByteBuffer.rewind();
                 }
-                
+
                 if (outputBuffer != null) {
                     outputBuffer.getBuffer().rewind();
                 } else if (outputByteBuffer != null) {
                     outputByteBuffer.rewind();
                 }
-                
-                // Execute inference
-                String accelerator = getAcceleratorInfo();
-                Log.d(TAG, "Running inference on " + accelerator);
-                
+
                 try {
                     long inferenceStart = System.currentTimeMillis();
-                    
-                    // NPU性能診斷
-                    if (currentMode == ProcessingMode.NPU) {
-                        String modelPath = configManager.getDefaultModelPath();
-                        boolean isFloat16Model = modelPath.contains("float16");
-                        boolean allowFp16 = configManager.isAllowFp16OnNpu();
-                        
-                        Log.d(TAG, "=== NPU Inference Diagnostics ===");
-                        Log.d(TAG, "Model: " + modelPath + " (" + (isFloat16Model ? "Float16" : "Float32") + ")");
-                        Log.d(TAG, "NPU allow_fp16: " + allowFp16);
-                        Log.d(TAG, "Expected behavior: " + 
-                              (isFloat16Model && allowFp16 ? "Native Float16 (or upconvert to Float32)" : 
-                               isFloat16Model && !allowFp16 ? "Force Float32 processing" :
-                               "Native Float32"));
-                    }
-                    
+
                     // Run inference with appropriate buffers
                     ByteBuffer inputBuf = (inputBuffer != null) ? inputBuffer.getBuffer() : inputByteBuffer;
                     ByteBuffer outputBuf = (outputBuffer != null) ? outputBuffer.getBuffer() : outputByteBuffer;
                     currentInterpreter.run(inputBuf, outputBuf);
                     long pureInferenceTime = System.currentTimeMillis() - inferenceStart;
-                    
-                    // NPU性能分析
-                    if (currentMode == ProcessingMode.NPU) {
-                        Log.d(TAG, "NPU Pure inference time: " + pureInferenceTime + "ms");
-                        if (HardwareInfo.isMT8195()) {
-                            Log.d(TAG, "MediaTek MT8195 NPU Performance Analysis:");
-                            Log.d(TAG, "  - Inference time: " + pureInferenceTime + "ms");
-                            Log.d(TAG, "  - If Float16/Float32 times are identical, NNAPI may be upconverting");
-                        }
-                    } else {
-                        Log.d(TAG, "Pure inference time: " + pureInferenceTime + "ms");
-                    }
-                } catch (java.nio.BufferOverflowException e) {
-                    Log.e(TAG, "BufferOverflowException during inference, attempting to fix", e);
-                    
-                    // 強制重新分配緩衝區
-                    inputBuffer = null;
-                    outputBuffer = null;
-                    inputByteBuffer = null;
-                    outputByteBuffer = null;
-                    ensureBuffersAreCorrectSize();
-                    
-                    // 重新轉換輸入
-                    convertBitmapToBuffer(resizedInput);
-                    
-                    // 確保緩衝區位置正確
-                    if (inputBuffer != null) {
-                        inputBuffer.getBuffer().rewind();
-                    } else if (inputByteBuffer != null) {
-                        inputByteBuffer.rewind();
-                    }
-                    
-                    if (outputBuffer != null) {
-                        outputBuffer.getBuffer().rewind();
-                    } else if (outputByteBuffer != null) {
-                        outputByteBuffer.rewind();
-                    }
-                    
-                    Log.d(TAG, "Retrying inference with new buffers");
-                    
-                    // 重試推理
-                    ByteBuffer retryInputBuf = (inputBuffer != null) ? inputBuffer.getBuffer() : inputByteBuffer;
-                    ByteBuffer retryOutputBuf = (outputBuffer != null) ? outputBuffer.getBuffer() : outputByteBuffer;
-                    currentInterpreter.run(retryInputBuf, retryOutputBuf);
+
+                    Log.d(TAG, "Pure inference time: " + pureInferenceTime + "ms");
+                } catch (Exception e) {
+                    Log.e(TAG, "Error during model inference", e);
+                    throw new RuntimeException("Model inference failed: " + e.getMessage(), e);
                 }
+            
                 
                 // 轉換輸出
                 long outputStart = System.currentTimeMillis();
                 Bitmap resultBitmap = convertOutputToBitmap();
                 long outputTime = System.currentTimeMillis() - outputStart;
-                
+
                 long totalTime = System.currentTimeMillis() - totalStartTime;
-                Log.d(TAG, "Detailed timing - Output conversion: " + outputTime + "ms, Total: " + totalTime + "ms");
-                
+
                 // 釋放中間結果
                 if (resizedInput != inputBitmap && !resizedInput.isRecycled()) {
                     resizedInput.recycle();
                 }
-                
+
                 callback.onResult(resultBitmap, totalTime);
-                
-            } catch (Exception e) {
-                Log.e(TAG, "Error during inference", e);
-                callback.onError("Inference failed: " + e.getMessage());
+
+                } catch (Exception e) {
+                    Log.e(TAG, "Error during inference", e);
+                    callback.onError("Inference failed: " + e.getMessage());
             }
         });
     }
@@ -811,8 +682,6 @@ public class ThreadSafeSRProcessor {
                 return null;
             }
             
-            // 添加輸出調試 - 檢查像素值範圍
-            debugPixelValues(cachedOutputPixelArray, totalPixels, outputDataType);
             
         } catch (Exception e) {
             Log.e(TAG, "Error converting output buffer to bitmap", e);
@@ -836,8 +705,6 @@ public class ThreadSafeSRProcessor {
         // Read all float data to cached array
         outputBuffer.getBuffer().asFloatBuffer().get(cachedOutputFloatArray, 0, totalFloats);
         
-        // Debug original float values
-        debugFloat32Values(cachedOutputFloatArray, totalFloats);
         
         // Use utility class for conversion with parallel processing support
         if (totalPixels > Constants.LARGE_IMAGE_PIXEL_THRESHOLD) {
@@ -886,113 +753,7 @@ public class ThreadSafeSRProcessor {
     }
     
     
-    private void debugFloat32Values(float[] floatArray, int totalFloats) {
-        if (totalFloats == 0) return;
-        
-        // Sample float values for analysis
-        int sampleSize = Math.min(300, totalFloats); // Sample 100 pixels = 300 floats (RGB)
-        
-        float min = Float.MAX_VALUE, max = Float.MIN_VALUE;
-        float sum = 0;
-        int zeroCount = 0, negativeCount = 0, aboveOneCount = 0;
-        
-        for (int i = 0; i < sampleSize; i++) {
-            float val = floatArray[i];
-            min = Math.min(min, val);
-            max = Math.max(max, val);
-            sum += val;
-            
-            if (val == 0.0f) zeroCount++;
-            if (val < 0.0f) negativeCount++;
-            if (val > 1.0f) aboveOneCount++;
-        }
-        
-        float mean = sum / sampleSize;
-        
-        Log.d(TAG, "=== Raw Float32 Output Analysis ===");
-        Log.d(TAG, "Sample size: " + sampleSize + "/" + totalFloats);
-        Log.d(TAG, "Range: [" + min + ", " + max + "]");
-        Log.d(TAG, "Mean: " + mean);
-        Log.d(TAG, "Zero values: " + zeroCount + " (" + (100.0 * zeroCount / sampleSize) + "%)");
-        Log.d(TAG, "Negative values: " + negativeCount + " (" + (100.0 * negativeCount / sampleSize) + "%)");
-        Log.d(TAG, "Above 1.0 values: " + aboveOneCount + " (" + (100.0 * aboveOneCount / sampleSize) + "%)");
-        
-        // Check for problematic ranges
-        if (min == 0.0f && max == 0.0f) {
-            Log.e(TAG, "⚠️ ALL FLOAT VALUES ARE ZERO! Model output is completely black.");
-        } else if (min < -1.0f || max > 1.0f) {
-            Log.w(TAG, "⚠️ Values outside typical [0,1] or [-1,1] range. May need different normalization.");
-        } else if (min >= 0.0f && max <= 1.0f) {
-            Log.d(TAG, "✓ Values in [0,1] range - standard normalization");
-        } else if (min >= -1.0f && max <= 1.0f) {
-            Log.d(TAG, "⚠️ Values in [-1,1] range - may need adjustment for INT8 quantized models");
-        }
-        
-        // Log first few values for debugging
-        Log.d(TAG, "First 9 float values (3 pixels RGB): ");
-        for (int i = 0; i < Math.min(9, sampleSize); i++) {
-            Log.d(TAG, "  [" + i + "] = " + floatArray[i]);
-        }
-    }
     
-    private void debugPixelValues(int[] pixels, int totalPixels, DataType outputDataType) {
-        if (totalPixels == 0) return;
-        
-        // Sample pixel values for analysis
-        int sampleSize = Math.min(100, totalPixels);
-        
-        int minR = 255, maxR = 0, minG = 255, maxG = 0, minB = 255, maxB = 0;
-        int zeroCount = 0, maxCount = 0;
-        
-        for (int i = 0; i < sampleSize; i++) {
-            int pixel = pixels[i];
-            int r = (pixel >> 16) & 0xFF;
-            int g = (pixel >> 8) & 0xFF;
-            int b = pixel & 0xFF;
-            
-            minR = Math.min(minR, r);
-            maxR = Math.max(maxR, r);
-            minG = Math.min(minG, g);
-            maxG = Math.max(maxG, g);
-            minB = Math.min(minB, b);
-            maxB = Math.max(maxB, b);
-            
-            if (pixel == 0xFF000000) zeroCount++; // Black pixel (ARGB)
-            if (r == 255 && g == 255 && b == 255) maxCount++; // White pixel
-        }
-        
-        Log.d(TAG, "=== Output Pixel Analysis ===");
-        Log.d(TAG, "Data type: " + outputDataType);
-        Log.d(TAG, "Sample size: " + sampleSize + "/" + totalPixels);
-        Log.d(TAG, "R range: [" + minR + ", " + maxR + "]");
-        Log.d(TAG, "G range: [" + minG + ", " + maxG + "]");
-        Log.d(TAG, "B range: [" + minB + ", " + maxB + "]");
-        Log.d(TAG, "Black pixels: " + zeroCount + " (" + (100.0 * zeroCount / sampleSize) + "%)");
-        Log.d(TAG, "White pixels: " + maxCount + " (" + (100.0 * maxCount / sampleSize) + "%)");
-        
-        // Check for problematic conditions
-        if (zeroCount == sampleSize) {
-            Log.e(TAG, "⚠️ ALL PIXELS ARE BLACK! This indicates a conversion problem.");
-        } else if (maxCount == sampleSize) {
-            Log.e(TAG, "⚠️ ALL PIXELS ARE WHITE! This indicates a conversion problem.");
-        } else if (minR == maxR && minG == maxG && minB == maxB) {
-            Log.w(TAG, "⚠️ All pixels have identical values: RGB(" + minR + "," + minG + "," + minB + ")");
-        } else {
-            Log.d(TAG, "✓ Pixel values appear to have normal variation");
-        }
-        
-        // Log some actual pixel values for debugging
-        if (sampleSize >= 5) {
-            Log.d(TAG, "First 5 pixels: ");
-            for (int i = 0; i < 5; i++) {
-                int pixel = pixels[i];
-                int r = (pixel >> 16) & 0xFF;
-                int g = (pixel >> 8) & 0xFF;
-                int b = pixel & 0xFF;
-                Log.d(TAG, "  [" + i + "] RGB(" + r + "," + g + "," + b + ") = 0x" + Integer.toHexString(pixel));
-            }
-        }
-    }
     
     
     
@@ -1020,7 +781,6 @@ public class ThreadSafeSRProcessor {
                     npuDelegate = null;
                 }
                 currentInterpreter = null;
-                Log.d(TAG, "All resources released");
             });
         }
         

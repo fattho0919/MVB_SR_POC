@@ -24,7 +24,6 @@ public class ImageComparisonView extends View {
     private Paint linePaint;
     private Paint textPaint;
     private Paint backgroundPaint;
-    private Paint shadowPaint;
     private boolean isDragging = false;
     
     
@@ -44,32 +43,23 @@ public class ImageComparisonView extends View {
     }
     
     private void init() {
-        // 分割線畫筆
+        // Line paint
         linePaint = new Paint();
-        linePaint.setColor(0xFFFFFFFF); // 白色
-        linePaint.setStrokeWidth(6f);
+        linePaint.setColor(0xFFFFFFFF);
+        linePaint.setStrokeWidth(4f);
         linePaint.setAntiAlias(true);
-        linePaint.setShadowLayer(4f, 0f, 2f, 0x80000000); // 陰影效果
         
-        // 文字畫筆
+        // Text paint
         textPaint = new Paint();
         textPaint.setColor(0xFFFFFFFF);
         textPaint.setTextSize(Constants.LABEL_TEXT_SIZE);
         textPaint.setAntiAlias(true);
         textPaint.setTypeface(Typeface.DEFAULT_BOLD);
-        textPaint.setShadowLayer(3f, 0f, 1f, 0x80000000);
         
-        // 標籤背景畫筆
+        // Background paint
         backgroundPaint = new Paint();
-        backgroundPaint.setColor(0x80000000); // 半透明黑色
+        backgroundPaint.setColor(0x80000000);
         backgroundPaint.setAntiAlias(true);
-        
-        // 陰影畫筆
-        shadowPaint = new Paint();
-        shadowPaint.setColor(0x40000000); // 淡陰影
-        shadowPaint.setAntiAlias(true);
-        
-        setLayerType(LAYER_TYPE_SOFTWARE, null); // 啟用陰影效果
     }
     
     public void setOriginalBitmap(Bitmap bitmap) {
@@ -113,19 +103,14 @@ public class ImageComparisonView extends View {
             drawBitmapSection(canvas, processedBitmap, dividerX, 0, width - dividerX, height, false);
         }
         
-        // 繪製分割線
+        // Draw divider line
         canvas.drawLine(dividerX, 0, dividerX, height, linePaint);
         
-        // 繪製圓形拖動把手
-        float handleRadius = 24f;
+        // Draw handle
+        float handleRadius = 20f;
         float handleY = height / 2f;
-        
-        // 繪製把手陰影
-        canvas.drawCircle(dividerX + 2, handleY + 2, handleRadius, shadowPaint);
-        // 繪製把手
         canvas.drawCircle(dividerX, handleY, handleRadius, linePaint);
         
-        // 繪製標籤
         drawLabels(canvas, width, height, dividerX);
     }
     
@@ -161,43 +146,25 @@ public class ImageComparisonView extends View {
     }
     
     private void drawLabels(Canvas canvas, int width, int height, int dividerX) {
-        // 左側標籤 (原圖)
-        if (dividerX > 100) { // 只有當左側有足夠空間時才繪製
-            String leftLabel = "原圖";
+        float labelY = 30f;
+        
+        // Left label
+        if (dividerX > 80) {
+            String leftLabel = "Original";
             float leftTextWidth = textPaint.measureText(leftLabel);
             float leftLabelX = (dividerX - leftTextWidth) / 2f;
-            float labelY = Constants.LABEL_HEIGHT / 2f + Constants.LABEL_TEXT_SIZE / 3f;
             
-            // 繪製標籤背景
-            RectF leftBgRect = new RectF(
-                leftLabelX - Constants.LABEL_PADDING,
-                Constants.LABEL_PADDING,
-                leftLabelX + leftTextWidth + Constants.LABEL_PADDING,
-                Constants.LABEL_HEIGHT
-            );
-            canvas.drawRoundRect(leftBgRect, 12f, 12f, backgroundPaint);
-            
-            // 繪製文字
+            canvas.drawRoundRect(leftLabelX - 8, 10, leftLabelX + leftTextWidth + 8, 40, 8f, 8f, backgroundPaint);
             canvas.drawText(leftLabel, leftLabelX, labelY, textPaint);
         }
         
-        // 右側標籤 (SR)
-        if (width - dividerX > 100) { // 只有當右側有足夠空間時才繪製
-            String rightLabel = "SR 結果";
+        // Right label  
+        if (width - dividerX > 80) {
+            String rightLabel = "Enhanced";
             float rightTextWidth = textPaint.measureText(rightLabel);
             float rightLabelX = dividerX + (width - dividerX - rightTextWidth) / 2f;
-            float labelY = Constants.LABEL_HEIGHT / 2f + Constants.LABEL_TEXT_SIZE / 3f;
             
-            // 繪製標籤背景
-            RectF rightBgRect = new RectF(
-                rightLabelX - Constants.LABEL_PADDING,
-                Constants.LABEL_PADDING,
-                rightLabelX + rightTextWidth + Constants.LABEL_PADDING,
-                Constants.LABEL_HEIGHT
-            );
-            canvas.drawRoundRect(rightBgRect, 12f, 12f, backgroundPaint);
-            
-            // 繪製文字
+            canvas.drawRoundRect(rightLabelX - 8, 10, rightLabelX + rightTextWidth + 8, 40, 8f, 8f, backgroundPaint);
             canvas.drawText(rightLabel, rightLabelX, labelY, textPaint);
         }
     }
@@ -232,7 +199,6 @@ public class ImageComparisonView extends View {
     private void updateDividerPosition(float x) {
         float newPosition = x / getWidth();
         setDividerPosition(newPosition);
-        Log.d(TAG, "Divider position updated: " + dividerPosition);
     }
     
     @Override
