@@ -15,6 +15,9 @@ import androidx.appcompat.app.AppCompatActivity;
 
 import com.example.sr_poc.processing.ProcessingController;
 import com.example.sr_poc.utils.MemoryUtils;
+import android.widget.ProgressBar;
+import android.graphics.Color;
+import androidx.appcompat.app.AlertDialog;
 
 public class MainActivity extends AppCompatActivity {
     
@@ -32,9 +35,11 @@ public class MainActivity extends AppCompatActivity {
     
     private ImageManager imageManager;
     private ThreadSafeSRProcessor srProcessor;
+    private HybridSRProcessor hybridProcessor;  // New hybrid processor
     private ConfigManager configManager;
     private Bitmap originalBitmap;
     private Bitmap processedBitmap;
+    private boolean useHybridInit = false;  // Flag to use hybrid initialization (DISABLED due to memory issues)
     
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -62,7 +67,12 @@ public class MainActivity extends AppCompatActivity {
         
         // 初始化時禁用所有按鈕並顯示 initing 狀態
         setButtonsEnabled(false);
-        tvInferenceTime.setText("Initing...");
+        tvInferenceTime.setText("Initializing...");
+        
+        // Keep original button text during initialization
+        btnCpuProcess.setText("CPU");
+        btnGpuProcess.setText("GPU");
+        btnNpuProcess.setText("NPU");
     }
     
     private void initComponents() {
@@ -77,29 +87,14 @@ public class MainActivity extends AppCompatActivity {
         HardwareInfo.logHardwareInfo(this);
         
         imageManager = new ImageManager(this);
-        srProcessor = new ThreadSafeSRProcessor(this);
         
-        // 異步初始化SR處理器
-        srProcessor.initialize(new ThreadSafeSRProcessor.InitCallback() {
-            @Override
-            public void onInitialized(boolean success, String message) {
-                runOnUiThread(() -> {
-                    if (success) {
-                        Log.d("MainActivity", "SR Processor: " + message);
-                        Toast.makeText(MainActivity.this, message, Toast.LENGTH_LONG).show();
-                        tvInferenceTime.setText("Ready");
-                        // 初始化成功後啟用所有按鈕
-                        setButtonsEnabled(true);
-                    } else {
-                        Log.e("MainActivity", "SR Processor failed: " + message);
-                        Toast.makeText(MainActivity.this, "Failed to initialize: " + message, Toast.LENGTH_LONG).show();
-                        tvInferenceTime.setText("Failed");
-                        // 初始化失敗仍然保持按鈕禁用狀態
-                        finish();
-                    }
-                });
-            }
-        });
+        // Use hybrid initialization for fast startup
+        if (useHybridInit) {
+            initializeHybridProcessor();
+        } else {
+            // Fallback to original initialization
+            initializeOriginalProcessor();
+        }
         
         // 在UI上顯示硬體資訊
         String acceleratorInfo = HardwareInfo.getAcceleratorInfo();
@@ -158,6 +153,14 @@ public class MainActivity extends AppCompatActivity {
                          Toast.LENGTH_LONG).show();
         }
         
+        // Check if requested mode is available
+        boolean modeAvailable = isModeAvailable(processingMode);
+        if (!modeAvailable && processingMode != ThreadSafeSRProcessor.ProcessingMode.CPU) {
+            // Show confirmation dialog for fallback
+            showFallbackConfirmationDialog(processingMode);
+            return;
+        }
+        
         // Disable buttons during processing
         setProcessingButtonsEnabled(false);
         
@@ -196,6 +199,15 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onComplete() {
                 runOnUiThread(() -> setProcessingButtonsEnabled(true));
+            }
+            
+            @Override
+            public void onModeFallback(String message) {
+                runOnUiThread(() -> {
+                    // Show a warning toast to the user
+                    Toast.makeText(MainActivity.this, message, Toast.LENGTH_LONG).show();
+                    Log.w("MainActivity", message);
+                });
             }
         });
     }
@@ -266,17 +278,37 @@ public class MainActivity extends AppCompatActivity {
     }
     
     private void setProcessingButtonsEnabled(boolean enabled) {
-        btnGpuProcess.setEnabled(enabled);
-        btnCpuProcess.setEnabled(enabled);
-        btnNpuProcess.setEnabled(enabled);
+        // Only enable buttons that were not permanently disabled
+        String gpuText = btnGpuProcess.getText().toString();
+        if (!gpuText.contains("UNAVAILABLE") && !gpuText.contains("Unavailable")) {
+            btnGpuProcess.setEnabled(enabled);
+        }
+        
+        String cpuText = btnCpuProcess.getText().toString();
+        if (!cpuText.contains("UNAVAILABLE") && !cpuText.contains("Unavailable")) {
+            btnCpuProcess.setEnabled(enabled);
+        }
+        
+        String npuText = btnNpuProcess.getText().toString();
+        if (!npuText.contains("UNAVAILABLE") && !npuText.contains("Unavailable")) {
+            btnNpuProcess.setEnabled(enabled);
+        }
     }
     
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        
+        // Clean up processors
+        if (hybridProcessor != null) {
+            hybridProcessor.close();
+            hybridProcessor = null;
+        }
         if (srProcessor != null) {
             srProcessor.close();
+            srProcessor = null;
         }
+        
         // Clean up bitmaps
         if (imageManager != null) {
             MemoryUtils.safeRecycleBitmap(imageManager.getCurrentBitmap());
@@ -293,5 +325,253 @@ public class MainActivity extends AppCompatActivity {
     private void startNpuTest() {
         Intent intent = new Intent(this, NPUModelTestActivity.class);
         startActivity(intent);
+    }
+    
+    /**
+     * Initialize using the new HybridSRProcessor for fast startup.
+     */
+    private void initializeHybridProcessor() {
+        Log.d("MainActivity", "Starting hybrid initialization");
+        
+        hybridProcessor = new HybridSRProcessor(this);
+        
+        hybridProcessor.initializeHybrid(new HybridSRProcessor.HybridCallback() {
+            @Override
+            public void onQuickStartReady(HybridSRProcessor.ProcessingMode mode, long initTimeMs) {
+                Log.d("MainActivity", "Quick start ready: " + mode + " in " + initTimeMs + "ms");
+                runOnUiThread(() -> {
+                    tvInferenceTime.setText("Ready (CPU)");
+                    // Enable basic functionality immediately
+                    btnSwitchImage.setEnabled(true);
+                    btnResetImage.setEnabled(true);
+                    cbEnableTiling.setEnabled(true);
+                    
+                    // CPU is ready
+                    btnCpuProcess.setEnabled(true);
+                    updateButtonText(btnCpuProcess, "CPU");
+                    
+                    Toast.makeText(MainActivity.this, 
+                        "App ready! CPU mode available in " + (initTimeMs/1000.0) + "s", 
+                        Toast.LENGTH_SHORT).show();
+                });
+            }
+            
+            @Override
+            public void onModeAvailable(HybridSRProcessor.ProcessingMode mode, String deviceInfo) {
+                Log.d("MainActivity", "Mode available: " + mode + " (" + deviceInfo + ")");
+                runOnUiThread(() -> {
+                    switch (mode) {
+                        case CPU:
+                            btnCpuProcess.setEnabled(true);
+                            updateButtonText(btnCpuProcess, "CPU");
+                            break;
+                        case GPU:
+                            btnGpuProcess.setEnabled(true);
+                            updateButtonText(btnGpuProcess, "GPU");
+                            break;
+                        case NPU:
+                            btnNpuProcess.setEnabled(true);
+                            updateButtonText(btnNpuProcess, "NPU");
+                            break;
+                    }
+                });
+            }
+            
+            @Override
+            public void onModeFailed(HybridSRProcessor.ProcessingMode mode, String reason) {
+                Log.w("MainActivity", "Mode failed: " + mode + " - " + reason);
+                runOnUiThread(() -> {
+                    switch (mode) {
+                        case CPU:
+                            permanentlyDisableButton(btnCpuProcess, "CPU", reason);
+                            break;
+                        case GPU:
+                            permanentlyDisableButton(btnGpuProcess, "GPU", reason);
+                            break;
+                        case NPU:
+                            permanentlyDisableButton(btnNpuProcess, "NPU", reason);
+                            break;
+                    }
+                });
+            }
+            
+            @Override
+            public void onAllModesReady(int availableModesCount, long totalTimeMs) {
+                Log.d("MainActivity", "All modes ready: " + availableModesCount + 
+                      " modes in " + totalTimeMs + "ms");
+                runOnUiThread(() -> {
+                    if (availableModesCount == 0) {
+                        // No modes available - fallback to original processor
+                        Log.w("MainActivity", "No modes available from hybrid init, falling back to original processor");
+                        tvInferenceTime.setText("Fallback mode");
+                        Toast.makeText(MainActivity.this, 
+                            "Warning: Using fallback mode. Performance may be limited.", 
+                            Toast.LENGTH_LONG).show();
+                        
+                        // Initialize original processor as fallback
+                        initializeOriginalProcessor();
+                    } else {
+                        String message = String.format("Initialization complete: %d mode%s in %.1fs", 
+                            availableModesCount, 
+                            availableModesCount > 1 ? "s" : "",
+                            totalTimeMs/1000.0);
+                        tvInferenceTime.setText("Ready");
+                        Toast.makeText(MainActivity.this, message, Toast.LENGTH_LONG).show();
+                        
+                        // Get the full processor for processing
+                        if (hybridProcessor != null && hybridProcessor.getFullProcessor() != null) {
+                            srProcessor = hybridProcessor.getFullProcessor();
+                        } else if (srProcessor == null) {
+                            // Create a basic processor if needed
+                            Log.w("MainActivity", "Creating basic processor as fallback");
+                            srProcessor = new ThreadSafeSRProcessor(MainActivity.this);
+                        }
+                    }
+                });
+            }
+            
+            @Override
+            public void onProgress(String message, int progressPercent) {
+                Log.d("MainActivity", "Progress: " + message + " (" + progressPercent + "%)");
+                runOnUiThread(() -> {
+                    tvInferenceTime.setText(message);
+                });
+            }
+            
+            @Override
+            public void onInitError(HybridSRProcessor.ProcessingMode mode, Exception error) {
+                Log.e("MainActivity", "Init error for " + mode, error);
+                runOnUiThread(() -> {
+                    String errorMsg = "Initialization error" + 
+                        (mode != null ? " for " + mode : "") + ": " + error.getMessage();
+                    Toast.makeText(MainActivity.this, errorMsg, Toast.LENGTH_LONG).show();
+                    tvInferenceTime.setText("Error");
+                });
+            }
+        });
+    }
+    
+    /**
+     * Fallback to original ThreadSafeSRProcessor initialization.
+     */
+    private void initializeOriginalProcessor() {
+        // Avoid creating duplicate processors
+        if (srProcessor != null) {
+            Log.w("MainActivity", "Processor already exists, skipping duplicate initialization");
+            return;
+        }
+        
+        srProcessor = new ThreadSafeSRProcessor(this);
+        
+        // 異步初始化SR處理器
+        srProcessor.initialize(new ThreadSafeSRProcessor.InitCallback() {
+            @Override
+            public void onInitialized(boolean success, String message) {
+                runOnUiThread(() -> {
+                    if (success) {
+                        Log.d("MainActivity", "SR Processor: " + message);
+                        Toast.makeText(MainActivity.this, message, Toast.LENGTH_LONG).show();
+                        tvInferenceTime.setText("Ready");
+                        
+                        // Parse the message to check which modes are available
+                        boolean gpuAvailable = message.contains("GPU: ✓");
+                        boolean npuAvailable = message.contains("NPU: ✓");
+                        
+                        // Enable buttons based on availability
+                        setButtonsEnabled(true);
+                        
+                        // Disable unavailable modes
+                        if (!gpuAvailable) {
+                            permanentlyDisableButton(btnGpuProcess, "GPU", "GPU initialization failed or not supported");
+                        }
+                        if (!npuAvailable) {
+                            permanentlyDisableButton(btnNpuProcess, "NPU", "NPU not available on this device");
+                        }
+                    } else {
+                        Log.e("MainActivity", "SR Processor failed: " + message);
+                        Toast.makeText(MainActivity.this, "Failed to initialize: " + message, Toast.LENGTH_LONG).show();
+                        tvInferenceTime.setText("Failed");
+                        // 初始化失敗仍然保持按鈕禁用狀態
+                        finish();
+                    }
+                });
+            }
+        });
+    }
+    
+    /**
+     * Permanently disable a hardware button when the mode is unavailable.
+     * This provides clear visual feedback that the hardware is not available.
+     */
+    private void permanentlyDisableButton(Button button, String modeName, String reason) {
+        button.setEnabled(false);
+        button.setClickable(false);
+        button.setFocusable(false);
+        
+        // Update button appearance
+        button.setAlpha(0.4f);
+        button.setText(modeName + " (Unavailable)");
+        
+        // Set background to indicate unavailable state
+        button.setBackgroundColor(Color.parseColor("#E0E0E0"));
+        
+        // Show detailed reason on long press (even when disabled)
+        button.setOnLongClickListener(v -> {
+            String message = modeName + " unavailable:\n" + reason;
+            Toast.makeText(MainActivity.this, message, Toast.LENGTH_LONG).show();
+            Log.d("MainActivity", message);
+            return true;
+        });
+        
+        Log.d("MainActivity", "Button permanently disabled: " + modeName + " - " + reason);
+    }
+    
+    /**
+     * Update button text while preserving enabled state.
+     */
+    private void updateButtonText(Button button, String text) {
+        button.setText(text);
+    }
+    
+    /**
+     * Check if a processing mode is available.
+     */
+    private boolean isModeAvailable(ThreadSafeSRProcessor.ProcessingMode mode) {
+        if (srProcessor == null) return false;
+        
+        switch (mode) {
+            case GPU:
+                return !btnGpuProcess.getText().toString().contains("UNAVAILABLE");
+            case NPU:
+                return !btnNpuProcess.getText().toString().contains("UNAVAILABLE");
+            case CPU:
+                return !btnCpuProcess.getText().toString().contains("UNAVAILABLE");
+            default:
+                return false;
+        }
+    }
+    
+    /**
+     * Show confirmation dialog when mode needs to fallback to CPU.
+     */
+    private void showFallbackConfirmationDialog(ThreadSafeSRProcessor.ProcessingMode requestedMode) {
+        String message = String.format(
+            "%s is not available on this device.\nWould you like to use CPU instead?",
+            requestedMode.name()
+        );
+        
+        new AlertDialog.Builder(this)
+            .setTitle("Hardware Not Available")
+            .setMessage(message)
+            .setPositiveButton("Use CPU", (dialog, which) -> {
+                // Process with CPU instead
+                Log.d("MainActivity", "User confirmed fallback from " + requestedMode + " to CPU");
+                performSuperResolutionWithMode(ThreadSafeSRProcessor.ProcessingMode.CPU);
+            })
+            .setNegativeButton("Cancel", (dialog, which) -> {
+                Log.d("MainActivity", "User cancelled fallback from " + requestedMode);
+            })
+            .setCancelable(true)
+            .show();
     }
 }

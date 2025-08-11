@@ -24,6 +24,7 @@ public class ProcessingController {
         void onSuccess(Bitmap resultBitmap, String timeMessage);
         void onError(String error);
         void onComplete();
+        default void onModeFallback(String message) {}
     }
     
     public ProcessingController(ThreadSafeSRProcessor srProcessor, ConfigManager configManager, ImageManager imageManager) {
@@ -62,7 +63,7 @@ public class ProcessingController {
                     stats.usedTileProcessing = true;
                 } else {
                     callback.onProgress("Using direct processing");
-                    resultBitmap = processDirect(currentBitmap, mode);
+                    resultBitmap = processDirect(currentBitmap, mode, callback);
                     stats.usedTileProcessing = false;
                 }
                 
@@ -85,7 +86,8 @@ public class ProcessingController {
         PerformanceMonitor.InferenceStats stats = PerformanceMonitor.createStats();
         stats.inputWidth = bitmap.getWidth();
         stats.inputHeight = bitmap.getHeight();
-        stats.accelerator = mode != null ? mode.name() + " (Forced)" : srProcessor.getAcceleratorInfo();
+        // Record the requested mode, actual mode will be updated after processing
+        stats.accelerator = mode != null ? mode.name() + " (Requested)" : srProcessor.getAcceleratorInfo();
         
         MemoryUtils.MemoryInfo memInfo = MemoryUtils.getCurrentMemoryInfo();
         stats.memoryBefore = memInfo.usedMemoryMB;
@@ -107,6 +109,10 @@ public class ProcessingController {
     }
     
     private Bitmap processDirect(Bitmap bitmap, ThreadSafeSRProcessor.ProcessingMode mode) {
+        return processDirect(bitmap, mode, null);
+    }
+    
+    private Bitmap processDirect(Bitmap bitmap, ThreadSafeSRProcessor.ProcessingMode mode, ProcessingCallback callback) {
         final Object lock = new Object();
         final Bitmap[] result = new Bitmap[1];
         final boolean[] completed = new boolean[1];
@@ -128,6 +134,18 @@ public class ProcessingController {
                     result[0] = null;
                     completed[0] = true;
                     lock.notify();
+                }
+            }
+            
+            @Override
+            public void onModeFallback(ThreadSafeSRProcessor.ProcessingMode requestedMode, 
+                                      ThreadSafeSRProcessor.ProcessingMode actualMode) {
+                String message = String.format("Note: %s not available, using %s instead", 
+                    requestedMode.name(), actualMode.name());
+                Log.w(TAG, message);
+                // Forward to UI callback if available
+                if (callback != null) {
+                    callback.onModeFallback(message);
                 }
             }
         };
@@ -164,13 +182,15 @@ public class ProcessingController {
             MemoryUtils.MemoryInfo memInfo = MemoryUtils.getCurrentMemoryInfo();
             stats.memoryAfter = memInfo.usedMemoryMB;
             
+            // Update stats with actual accelerator used
+            String actualAccelerator = srProcessor.getAcceleratorInfo();
+            stats.accelerator = actualAccelerator;
+            
             PerformanceMonitor.logPerformanceStats(stats);
             
-            String timeMessage = String.format("Inference time: %d ms", stats.inferenceTime);
-            if (stats.accelerator.contains("(Forced)")) {
-                timeMessage = String.format("Inference time (%s): %d ms", 
-                    stats.accelerator.replace(" (Forced)", ""), stats.inferenceTime);
-            }
+            // Show the actual processing mode used
+            String actualMode = srProcessor.getCurrentMode().name();
+            String timeMessage = String.format("Inference time (%s): %d ms", actualMode, stats.inferenceTime);
             
             callback.onSuccess(resultBitmap, timeMessage);
         } else {

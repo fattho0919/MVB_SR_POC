@@ -232,7 +232,8 @@ public class ImageComparisonView extends View {
     private void updateDividerPosition(float x) {
         float newPosition = x / getWidth();
         setDividerPosition(newPosition);
-        Log.d(TAG, "Divider position updated: " + dividerPosition);
+        // comment out for production
+        // Log.d(TAG, "Divider position updated: " + dividerPosition);
     }
     
     @Override

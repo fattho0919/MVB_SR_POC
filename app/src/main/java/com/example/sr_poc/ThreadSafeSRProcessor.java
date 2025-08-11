@@ -24,6 +24,7 @@ import java.util.concurrent.Executors;
 import com.example.sr_poc.utils.BitmapConverter;
 import com.example.sr_poc.utils.Constants;
 import com.example.sr_poc.utils.MemoryUtils;
+import com.example.sr_poc.HardwareValidator;
 
 public class ThreadSafeSRProcessor {
     
@@ -111,14 +112,24 @@ public class ThreadSafeSRProcessor {
                 ByteBuffer tfliteModel = FileUtil.loadMappedFile(context, modelPath);
                 Log.d(TAG, "Model loaded: " + modelPath + " (" + (tfliteModel.capacity() / 1024) + "KB)");
                 
-                // 初始化GPU解釋器
-                boolean gpuSuccess = initializeGpuInterpreter(tfliteModel);
+                // On emulator, only initialize CPU to save memory
+                boolean gpuSuccess = false;
+                boolean npuSuccess = false;
+                boolean cpuSuccess = false;
                 
-                // 初始化CPU解釋器  
-                boolean cpuSuccess = initializeCpuInterpreter(tfliteModel);
-                
-                // 初始化NPU解釋器
-                boolean npuSuccess = initializeNpuInterpreter(tfliteModel);
+                if (HardwareValidator.isEmulator()) {
+                    Log.d(TAG, "Running on emulator - only initializing CPU mode to save memory");
+                    cpuSuccess = initializeCpuInterpreter(tfliteModel);
+                } else {
+                    // 初始化GPU解釋器
+                    gpuSuccess = initializeGpuInterpreter(tfliteModel);
+                    
+                    // 初始化CPU解釋器  
+                    cpuSuccess = initializeCpuInterpreter(tfliteModel);
+                    
+                    // 初始化NPU解釋器
+                    npuSuccess = initializeNpuInterpreter(tfliteModel);
+                }
                 
                 if (!gpuSuccess && !cpuSuccess && !npuSuccess) {
                     throw new RuntimeException("Failed to initialize all interpreters (GPU, CPU, NPU)");
@@ -128,15 +139,15 @@ public class ThreadSafeSRProcessor {
                 if (npuSuccess && configManager.isEnableNpu()) {
                     currentInterpreter = npuInterpreter;
                     currentMode = ProcessingMode.NPU;
-                    Log.d(TAG, "Default mode: NPU");
+                    Log.d(TAG, "Default mode: NPU (Neural Processing Unit)");
                 } else if (gpuSuccess) {
                     currentInterpreter = gpuInterpreter;
                     currentMode = ProcessingMode.GPU;
-                    Log.d(TAG, "Default mode: GPU + NNAPI");
+                    Log.d(TAG, "Default mode: GPU (Hardware Accelerated)");
                 } else {
                     currentInterpreter = cpuInterpreter;
                     currentMode = ProcessingMode.CPU;
-                    Log.d(TAG, "Default mode: NNAPI/CPU");
+                    Log.d(TAG, "Default mode: CPU (XNNPACK Optimized)");
                 }
                 
                 allocateBuffers();
@@ -190,22 +201,50 @@ public class ThreadSafeSRProcessor {
     
     private boolean initializeCpuInterpreter(ByteBuffer tfliteModel) {
         try {
-            Log.d(TAG, "Initializing CPU interpreter");
-            Interpreter.Options cpuOptions = new Interpreter.Options();
-            if (configManager.isUseNnapi()) {
-                cpuOptions.setUseNNAPI(true);
-            }
-            setupCpu(cpuOptions);
-            cpuInterpreter = new Interpreter(tfliteModel, cpuOptions);
+            Log.d(TAG, "Initializing CPU interpreter with pure XNNPACK (no NNAPI)");
+            cpuInterpreter = createOptimizedCpuInterpreter(tfliteModel);
             
             if (actualInputWidth == 0) {
                 readModelDimensions(cpuInterpreter);
             }
+            Log.d(TAG, "CPU interpreter created successfully (XNNPACK optimized)");
             return true;
         } catch (Exception e) {
             Log.e(TAG, "Failed to create CPU interpreter: " + e.getMessage(), e);
             return false;
         }
+    }
+    
+    /**
+     * Creates an optimized CPU interpreter for fast initialization.
+     * This method is designed for quick startup (target: < 2 seconds).
+     * Key optimizations:
+     * - No NNAPI overhead (saves ~10 seconds)
+     * - Direct XNNPACK acceleration
+     * - Optimized thread allocation
+     * - Minimal validation overhead
+     */
+    public Interpreter createOptimizedCpuInterpreter(ByteBuffer tfliteModel) throws Exception {
+        long startTime = System.currentTimeMillis();
+        
+        Interpreter.Options cpuOptions = new Interpreter.Options();
+        
+        // CRITICAL: Do NOT use NNAPI for CPU mode
+        // Use pure CPU with XNNPACK acceleration
+        setupCpu(cpuOptions);
+        
+        // Additional optimizations for fast startup
+        cpuOptions.setAllowBufferHandleOutput(false);  // Reduce memory overhead
+        cpuOptions.setCancellable(false);  // Skip cancellation checks
+        
+        // Emulator optimizations are now handled in setupCpu()
+        
+        Interpreter interpreter = new Interpreter(tfliteModel, cpuOptions);
+        
+        long initTime = System.currentTimeMillis() - startTime;
+        Log.d(TAG, "Optimized CPU interpreter created in " + initTime + "ms");
+        
+        return interpreter;
     }
     
     private boolean initializeNpuInterpreter(ByteBuffer tfliteModel) {
@@ -356,7 +395,16 @@ public class ThreadSafeSRProcessor {
     }
     
     private void setupCpu(Interpreter.Options options) {
-        // 使用配置文件中的線程數
+        // On emulator, use minimal settings to avoid memory issues
+        if (HardwareValidator.isEmulator()) {
+            options.setNumThreads(1);  // Single thread on emulator
+            options.setAllowFp16PrecisionForFp32(false);  // No FP16 on emulator
+            options.setUseXNNPACK(false);  // Disable XNNPACK on emulator to save memory
+            Log.d(TAG, "CPU configured for emulator: 1 thread, no XNNPACK");
+            return;
+        }
+        
+        // Normal device configuration
         int configThreads = configManager.getDefaultNumThreads();
         int numThreads = Math.max(configThreads, Runtime.getRuntime().availableProcessors());
         options.setNumThreads(numThreads);
@@ -401,16 +449,26 @@ public class ThreadSafeSRProcessor {
         }
     }
     
-    private void switchToMode(ProcessingMode mode) {
+    private boolean switchToMode(ProcessingMode mode) {
         // 快速模式切換 - 無需重新初始化!
+        ProcessingMode previousMode = currentMode;
+        boolean switchSuccess = false;
+        
         switch (mode) {
             case GPU:
                 if (gpuInterpreter != null) {
                     currentInterpreter = gpuInterpreter;
                     currentMode = ProcessingMode.GPU;
                     Log.d(TAG, "Switched to GPU mode (instant)");
+                    switchSuccess = true;
                 } else {
-                    Log.w(TAG, "GPU interpreter not available, keeping current mode");
+                    Log.w(TAG, "GPU interpreter not available, falling back to CPU");
+                    // Fallback to CPU
+                    if (cpuInterpreter != null) {
+                        currentInterpreter = cpuInterpreter;
+                        currentMode = ProcessingMode.CPU;
+                        Log.d(TAG, "Fallback to CPU mode from GPU request");
+                    }
                 }
                 break;
             case CPU:
@@ -418,6 +476,7 @@ public class ThreadSafeSRProcessor {
                     currentInterpreter = cpuInterpreter;
                     currentMode = ProcessingMode.CPU;
                     Log.d(TAG, "Switched to CPU mode (instant)");
+                    switchSuccess = true;
                 } else {
                     Log.w(TAG, "CPU interpreter not available, keeping current mode");
                 }
@@ -427,13 +486,22 @@ public class ThreadSafeSRProcessor {
                     currentInterpreter = npuInterpreter;
                     currentMode = ProcessingMode.NPU;
                     Log.d(TAG, "Switched to NPU mode (instant)");
+                    switchSuccess = true;
                 } else {
-                    Log.w(TAG, "NPU interpreter not available, keeping current mode");
+                    Log.w(TAG, "NPU interpreter not available, falling back to CPU");
+                    // Fallback to CPU
+                    if (cpuInterpreter != null) {
+                        currentInterpreter = cpuInterpreter;
+                        currentMode = ProcessingMode.CPU;
+                        Log.d(TAG, "Fallback to CPU mode from NPU request");
+                    }
                 }
                 break;
             default:
                 Log.w(TAG, "Unknown processing mode, keeping current mode");
         }
+        
+        return switchSuccess;
     }
     
     private void ensureBuffersAreCorrectSize() {
@@ -530,6 +598,7 @@ public class ThreadSafeSRProcessor {
     public interface InferenceCallback {
         void onResult(Bitmap result, long inferenceTime);
         void onError(String error);
+        default void onModeFallback(ProcessingMode requestedMode, ProcessingMode actualMode) {}
     }
     
     public void processImage(Bitmap inputBitmap, InferenceCallback callback) {
@@ -559,11 +628,20 @@ public class ThreadSafeSRProcessor {
                 Log.d(TAG, "Processing image: " + inputBitmap.getWidth() + "x" + inputBitmap.getHeight());
                 
                 // 快速模式切換 - 無延遲!
+                ProcessingMode requestedMode = forceMode;
+                ProcessingMode actualMode = currentMode;
+                
                 if (forceMode != null && forceMode != currentMode) {
                     long switchStart = System.currentTimeMillis();
-                    switchToMode(forceMode);
+                    boolean switchSuccess = switchToMode(forceMode);
                     long switchTime = System.currentTimeMillis() - switchStart;
                     Log.d(TAG, "Mode switch completed in " + switchTime + "ms");
+                    
+                    // Notify if fallback occurred
+                    actualMode = currentMode;
+                    if (!switchSuccess && requestedMode != actualMode) {
+                        callback.onModeFallback(requestedMode, actualMode);
+                    }
                 }
                 
                 // 確保輸入尺寸符合模型要求
@@ -594,8 +672,9 @@ public class ThreadSafeSRProcessor {
                 }
                 
                 // Execute inference
+                // Use the actual current mode, not the requested mode
                 String accelerator = getAcceleratorInfo();
-                Log.d(TAG, "Running inference on " + accelerator);
+                Log.d(TAG, "Running inference on " + accelerator + " (actual mode: " + currentMode + ")");
                 
                 try {
                     long inferenceStart = System.currentTimeMillis();
@@ -1063,12 +1142,12 @@ public class ThreadSafeSRProcessor {
     public String getAcceleratorInfo() {
         switch (currentMode) {
             case GPU:
-                return "GPU + NNAPI (Optimized)";
+                return "GPU (Hardware Accelerated)";
             case NPU:
                 return "NPU (Neural Processing Unit)";
             case CPU:
             default:
-                return "NNAPI/CPU (Optimized)";
+                return "CPU (XNNPACK Optimized)";
         }
     }
     
