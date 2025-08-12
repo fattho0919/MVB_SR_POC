@@ -200,6 +200,9 @@ public class MainActivity extends AppCompatActivity implements ComponentCallback
         setButtonsEnabled(false);
         tvInferenceTime.setText("Loading model...");
         
+        // Reset all hardware buttons to default state before switching
+        resetHardwareButtons();
+        
         // Perform cleanup and reinitialization in background
         new Thread(() -> {
             try {
@@ -473,19 +476,19 @@ public class MainActivity extends AppCompatActivity implements ComponentCallback
     }
     
     private void setProcessingButtonsEnabled(boolean enabled) {
-        // Only enable buttons that were not permanently disabled
-        String gpuText = btnGpuProcess.getText().toString();
-        if (!gpuText.contains("UNAVAILABLE") && !gpuText.contains("Unavailable")) {
+        // Only enable buttons that were not marked as unavailable
+        String gpuText = btnGpuProcess.getText().toString().toUpperCase();
+        if (!gpuText.contains("UNAVAILABLE")) {
             btnGpuProcess.setEnabled(enabled);
         }
         
-        String cpuText = btnCpuProcess.getText().toString();
-        if (!cpuText.contains("UNAVAILABLE") && !cpuText.contains("Unavailable")) {
+        String cpuText = btnCpuProcess.getText().toString().toUpperCase();
+        if (!cpuText.contains("UNAVAILABLE")) {
             btnCpuProcess.setEnabled(enabled);
         }
         
-        String npuText = btnNpuProcess.getText().toString();
-        if (!npuText.contains("UNAVAILABLE") && !npuText.contains("Unavailable")) {
+        String npuText = btnNpuProcess.getText().toString().toUpperCase();
+        if (!npuText.contains("UNAVAILABLE")) {
             btnNpuProcess.setEnabled(enabled);
         }
     }
@@ -695,6 +698,41 @@ public class MainActivity extends AppCompatActivity implements ComponentCallback
     }
     
     /**
+     * Reset all hardware buttons to their default state.
+     * Called before loading a new model to ensure clean state.
+     */
+    private void resetHardwareButtons() {
+        // Reset GPU button
+        btnGpuProcess.setEnabled(false);
+        btnGpuProcess.setClickable(true);
+        btnGpuProcess.setFocusable(true);
+        btnGpuProcess.setAlpha(1.0f);
+        btnGpuProcess.setText("GPU");
+        btnGpuProcess.setBackgroundResource(android.R.drawable.btn_default);
+        btnGpuProcess.setOnLongClickListener(null);
+        
+        // Reset CPU button
+        btnCpuProcess.setEnabled(false);
+        btnCpuProcess.setClickable(true);
+        btnCpuProcess.setFocusable(true);
+        btnCpuProcess.setAlpha(1.0f);
+        btnCpuProcess.setText("CPU");
+        btnCpuProcess.setBackgroundResource(android.R.drawable.btn_default);
+        btnCpuProcess.setOnLongClickListener(null);
+        
+        // Reset NPU button
+        btnNpuProcess.setEnabled(false);
+        btnNpuProcess.setClickable(true);
+        btnNpuProcess.setFocusable(true);
+        btnNpuProcess.setAlpha(1.0f);
+        btnNpuProcess.setText("NPU");
+        btnNpuProcess.setBackgroundResource(android.R.drawable.btn_default);
+        btnNpuProcess.setOnLongClickListener(null);
+        
+        Log.d("MainActivity", "Hardware buttons reset to default state");
+    }
+    
+    /**
      * Permanently disable a hardware button when the mode is unavailable.
      * This provides clear visual feedback that the hardware is not available.
      */
@@ -736,11 +774,11 @@ public class MainActivity extends AppCompatActivity implements ComponentCallback
         
         switch (mode) {
             case GPU:
-                return !btnGpuProcess.getText().toString().contains("UNAVAILABLE");
+                return !btnGpuProcess.getText().toString().toUpperCase().contains("UNAVAILABLE");
             case NPU:
-                return !btnNpuProcess.getText().toString().contains("UNAVAILABLE");
+                return !btnNpuProcess.getText().toString().toUpperCase().contains("UNAVAILABLE");
             case CPU:
-                return !btnCpuProcess.getText().toString().contains("UNAVAILABLE");
+                return !btnCpuProcess.getText().toString().toUpperCase().contains("UNAVAILABLE");
             default:
                 return false;
         }

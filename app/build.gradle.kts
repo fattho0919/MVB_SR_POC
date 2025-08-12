@@ -8,7 +8,7 @@ android {
 
     defaultConfig {
         applicationId = "com.example.sr_poc"
-        minSdk = 24
+        minSdk = 27  // Changed from 24 to 27 for NNAPI support (Android 8.1+)
         targetSdk = 36
         versionCode = 2
         versionName = "2.0"
@@ -28,6 +28,16 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
+    }
+    
+    packaging {
+        jniLibs {
+            // Exclude duplicate native libraries if conflicts occur
+            pickFirsts.add("lib/x86/libc++_shared.so")
+            pickFirsts.add("lib/x86_64/libc++_shared.so")
+            pickFirsts.add("lib/arm64-v8a/libc++_shared.so")
+            pickFirsts.add("lib/armeabi-v7a/libc++_shared.so")
+        }
     }
 }
 
