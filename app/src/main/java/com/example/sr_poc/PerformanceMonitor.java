@@ -16,9 +16,10 @@ public class PerformanceMonitor {
     private static final ConcurrentHashMap<String, AtomicLong> totalProcessingTime = new ConcurrentHashMap<>();
     private static long firstInteractionTime = 0;
     private static long applicationStartTime = System.currentTimeMillis();
+    private static InferenceStats lastStats;
     
     public static class InferenceStats {
-        public long inferenceTime;
+        public long inferenceTime;  // Pure model inference time
         public long memoryBefore;
         public long memoryAfter;
         public String accelerator;
@@ -27,6 +28,14 @@ public class PerformanceMonitor {
         public int outputWidth;
         public int outputHeight;
         public boolean usedTileProcessing;
+        
+        // New fields for enhanced display
+        public String modelName;        // Extracted from path
+        public int tileCount;          // Number of tiles (if tiled)
+        public long outputConversionTime; // Conversion timing
+        public long modeSwitchTime;    // Mode switch overhead
+        public long preprocessingTime; // Input preprocessing time
+        public long totalTime;         // Total processing time
         
         @Override
         public String toString() {
@@ -44,9 +53,74 @@ public class PerformanceMonitor {
                 usedTileProcessing ? "Yes" : "No"
             );
         }
+        
+        // Enhanced formatting methods
+        public String formatSummary() {
+            // Show total time for summary (use totalTime if available, otherwise inferenceTime)
+            long displayTime = totalTime > 0 ? totalTime : inferenceTime;
+            return String.format("%s: %dms", accelerator, displayTime);
+        }
+        
+        public String formatDetailed() {
+            StringBuilder sb = new StringBuilder();
+            
+            // Line 1: Model and processing info
+            sb.append("Model: ").append(extractModelType(modelName));
+            sb.append(" | ").append(accelerator);
+            if (usedTileProcessing && tileCount > 0) {
+                sb.append(" | Tiled (").append(tileCount).append(")");
+            }
+            sb.append("\n");
+            
+            // Line 2: Timing breakdown
+            sb.append("Timing: ");
+            
+            // Show preprocessing time
+            if (preprocessingTime > 0) {
+                sb.append("Pre=").append(preprocessingTime).append("ms, ");
+            }
+            
+            // Model inference time
+            sb.append("Inf=").append(inferenceTime).append("ms");
+            
+            // Output conversion time
+            if (outputConversionTime > 0) {
+                sb.append(", Post=").append(outputConversionTime).append("ms");
+            }
+            
+            // Mode switch overhead if any
+            if (modeSwitchTime > 0) {
+                sb.append(", Switch=").append(modeSwitchTime).append("ms");
+            }
+            
+            // Performance metrics
+            double throughput = calculateThroughput();
+            sb.append(String.format(" | %.1f MP/s", throughput));
+            
+            return sb.toString();
+        }
+        
+        private double calculateThroughput() {
+            long pixels = (long) outputWidth * outputHeight;
+            double megapixels = pixels / 1_000_000.0;
+            return (megapixels * 1000.0) / inferenceTime;
+        }
+        
+        private String extractModelType(String path) {
+            if (path == null) return "unknown";
+            if (path.contains("int8") || path.contains("integer")) return "INT8";
+            if (path.contains("float16")) return "FP16";
+            if (path.contains("float32")) return "FP32";
+            return "unknown";
+        }
+    }
+    
+    public static InferenceStats getLastInferenceStats() {
+        return lastStats;
     }
     
     public static void logPerformanceStats(InferenceStats stats) {
+        lastStats = stats;  // Store for UI access
         Log.d(TAG, "=== Performance Statistics ===");
         Log.d(TAG, stats.toString());
         

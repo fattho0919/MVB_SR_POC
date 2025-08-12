@@ -3,6 +3,7 @@ package com.example.sr_poc;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.os.Bundle;
+import android.os.Handler;
 import android.view.View;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
@@ -40,6 +41,9 @@ public class MainActivity extends AppCompatActivity implements ComponentCallback
     private CheckBox cbEnableTiling;
     private TextView tvInferenceTime;
     private TextView tvImageInfo;
+    private TextView tvDetailedInfo;
+    private Handler detailHideHandler = new Handler();
+    private Runnable detailHideRunnable;
     
     // Model selection UI
     private Spinner spinnerModelSelection;
@@ -79,11 +83,12 @@ public class MainActivity extends AppCompatActivity implements ComponentCallback
         cbEnableTiling = findViewById(R.id.cbEnableTiling);
         tvInferenceTime = findViewById(R.id.tvInferenceTime);
         tvImageInfo = findViewById(R.id.tvImageInfo);
+        tvDetailedInfo = findViewById(R.id.tvDetailedInfo);
         spinnerModelSelection = findViewById(R.id.spinnerModelSelection);
         
-        // 初始化時禁用所有按鈕並顯示 initing 狀態
+        // 初始化時禁用所有按鈕並提示選擇模型
         setButtonsEnabled(false);
-        tvInferenceTime.setText("Initializing...");
+        tvInferenceTime.setText("Please select a model to start");
         
         // Keep original button text during initialization
         btnCpuProcess.setText("CPU");
@@ -107,13 +112,8 @@ public class MainActivity extends AppCompatActivity implements ComponentCallback
         
         imageManager = new ImageManager(this);
         
-        // Use hybrid initialization for fast startup
-        if (useHybridInit) {
-            initializeHybridProcessor();
-        } else {
-            // Fallback to original initialization
-            initializeOriginalProcessor();
-        }
+        // Don't initialize processors here - wait for model selection
+        // Processors will be initialized when user selects a model
         
         // 在UI上顯示硬體資訊
         String acceleratorInfo = HardwareInfo.getAcceleratorInfo();
@@ -124,6 +124,9 @@ public class MainActivity extends AppCompatActivity implements ComponentCallback
         // Get available models from ConfigManager
         List<String> availableModels = configManager.getAvailableModels();
         List<String> modelDisplayNames = new ArrayList<>();
+        
+        // Add prompt as first item
+        modelDisplayNames.add("-- Select a model --");
         
         // Create display names (full filenames with extensions)
         for (String modelPath : availableModels) {
@@ -137,20 +140,26 @@ public class MainActivity extends AppCompatActivity implements ComponentCallback
             android.R.layout.simple_spinner_dropdown_item);
         spinnerModelSelection.setAdapter(modelAdapter);
         
-        // Set current selection
-        currentModelPath = configManager.getSelectedModelPath();
-        int currentIndex = availableModels.indexOf(currentModelPath);
-        if (currentIndex >= 0) {
-            spinnerModelSelection.setSelection(currentIndex);
-        }
+        // Set to prompt by default (no model selected initially)
+        spinnerModelSelection.setSelection(0);
+        currentModelPath = null;
         
         spinnerModelSelection.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(AdapterView<?> parent, View view, 
                                        int position, long id) {
+                // Position 0 is the prompt "-- Select a model --"
+                if (position == 0) {
+                    // User selected the prompt, keep buttons disabled
+                    return;
+                }
+                
+                // Adjust for the prompt item (position - 1)
                 List<String> models = configManager.getAvailableModels();
-                if (position < models.size()) {
-                    String newModelPath = models.get(position);
+                int modelIndex = position - 1;
+                
+                if (modelIndex >= 0 && modelIndex < models.size()) {
+                    String newModelPath = models.get(modelIndex);
                     if (!newModelPath.equals(currentModelPath)) {
                         onModelChanged(newModelPath);
                     }
@@ -168,9 +177,15 @@ public class MainActivity extends AppCompatActivity implements ComponentCallback
             Toast.makeText(this, "Cannot change model during processing", 
                           Toast.LENGTH_SHORT).show();
             // Reset spinner to current selection
-            int currentIndex = configManager.getAvailableModels()
-                                           .indexOf(currentModelPath);
-            spinnerModelSelection.setSelection(currentIndex);
+            if (currentModelPath != null) {
+                int currentIndex = configManager.getAvailableModels()
+                                               .indexOf(currentModelPath);
+                // Add 1 to account for the prompt item
+                spinnerModelSelection.setSelection(currentIndex + 1);
+            } else {
+                // No model selected yet, go back to prompt
+                spinnerModelSelection.setSelection(0);
+            }
             return;
         }
         
@@ -238,6 +253,21 @@ public class MainActivity extends AppCompatActivity implements ComponentCallback
         btnCpuProcess.setOnClickListener(v -> performSuperResolutionWithCpu());
         btnNpuProcess.setOnClickListener(v -> performSuperResolutionWithNpu());
         btnResetImage.setOnClickListener(v -> resetToOriginalImage());
+        
+        // Click inference time to toggle detailed view
+        tvInferenceTime.setOnClickListener(v -> {
+            if (tvDetailedInfo.getVisibility() == View.VISIBLE) {
+                tvDetailedInfo.setVisibility(View.GONE);
+            } else if (!tvDetailedInfo.getText().toString().isEmpty()) {
+                tvDetailedInfo.setVisibility(View.VISIBLE);
+                
+                // Reset auto-hide timer
+                if (detailHideRunnable != null) {
+                    detailHideHandler.removeCallbacks(detailHideRunnable);
+                    detailHideHandler.postDelayed(detailHideRunnable, 10000);
+                }
+            }
+        });
         
         // 長按checkbox顯示配置摘要
         cbEnableTiling.setOnLongClickListener(v -> {
@@ -317,7 +347,35 @@ public class MainActivity extends AppCompatActivity implements ComponentCallback
                 runOnUiThread(() -> {
                     processedBitmap = resultBitmap;
                     updateComparisonView();
-                    tvInferenceTime.setText(timeMessage);
+                    
+                    // Get the stats from the last processing
+                    PerformanceMonitor.InferenceStats stats = 
+                        PerformanceMonitor.getLastInferenceStats();
+                    
+                    if (stats != null) {
+                        // Update summary display
+                        tvInferenceTime.setText(stats.formatSummary());
+                        
+                        // Show detailed info
+                        tvDetailedInfo.setText(stats.formatDetailed());
+                        tvDetailedInfo.setVisibility(View.VISIBLE);
+                        
+                        // Cancel previous hide task
+                        if (detailHideRunnable != null) {
+                            detailHideHandler.removeCallbacks(detailHideRunnable);
+                        }
+                        
+                        // Auto-hide after 10 seconds
+                        detailHideRunnable = () -> {
+                            if (tvDetailedInfo != null) {
+                                tvDetailedInfo.setVisibility(View.GONE);
+                            }
+                        };
+                        detailHideHandler.postDelayed(detailHideRunnable, 10000);
+                    } else {
+                        // Fallback to simple display
+                        tvInferenceTime.setText(timeMessage);
+                    }
                     
                     // Track performance
                     long processingTime = System.currentTimeMillis() - startTime;
@@ -435,6 +493,11 @@ public class MainActivity extends AppCompatActivity implements ComponentCallback
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        
+        // Clean up handlers
+        if (detailHideHandler != null && detailHideRunnable != null) {
+            detailHideHandler.removeCallbacks(detailHideRunnable);
+        }
         
         // Clean up processors
         if (hybridProcessor != null) {

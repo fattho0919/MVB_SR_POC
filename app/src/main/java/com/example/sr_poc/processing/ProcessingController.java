@@ -18,6 +18,9 @@ public class ProcessingController {
     private final ConfigManager configManager;
     private final ImageManager imageManager;
     
+    // Track tile count for stats
+    private int lastTileCount = 0;
+    
     public interface ProcessingCallback {
         void onStart();
         void onProgress(String message);
@@ -61,10 +64,12 @@ public class ProcessingController {
                     callback.onProgress("Using tile processing for large image");
                     resultBitmap = processByTiles(currentBitmap, mode, callback);
                     stats.usedTileProcessing = true;
+                    stats.tileCount = lastTileCount;
                 } else {
                     callback.onProgress("Using direct processing");
                     resultBitmap = processDirect(currentBitmap, mode, callback);
                     stats.usedTileProcessing = false;
+                    stats.tileCount = 0;
                 }
                 
                 long endTime = System.currentTimeMillis();
@@ -89,6 +94,9 @@ public class ProcessingController {
         // Record the requested mode, actual mode will be updated after processing
         stats.accelerator = mode != null ? mode.name() + " (Requested)" : srProcessor.getAcceleratorInfo();
         
+        // Add model name from config
+        stats.modelName = configManager.getDefaultModelPath();
+        
         MemoryUtils.MemoryInfo memInfo = MemoryUtils.getCurrentMemoryInfo();
         stats.memoryBefore = memInfo.usedMemoryMB;
         
@@ -97,7 +105,7 @@ public class ProcessingController {
     
     private Bitmap processByTiles(Bitmap bitmap, ThreadSafeSRProcessor.ProcessingMode mode, ProcessingCallback callback) {
         TileProcessor tileProcessor = new TileProcessor(srProcessor, configManager);
-        return tileProcessor.processByTiles(bitmap, new TileProcessor.ProcessCallback() {
+        Bitmap result = tileProcessor.processByTiles(bitmap, new TileProcessor.ProcessCallback() {
             @Override
             public void onProgress(int completed, int total) {
                 String progressMsg = mode != null ? 
@@ -106,6 +114,11 @@ public class ProcessingController {
                 callback.onProgress(progressMsg);
             }
         });
+        
+        // Store tile count in a field so we can access it later for stats
+        this.lastTileCount = tileProcessor.getLastTileCount();
+        
+        return result;
     }
     
     private Bitmap processDirect(Bitmap bitmap, ThreadSafeSRProcessor.ProcessingMode mode) {
@@ -116,12 +129,23 @@ public class ProcessingController {
         final Object lock = new Object();
         final Bitmap[] result = new Bitmap[1];
         final boolean[] completed = new boolean[1];
+        final ThreadSafeSRProcessor.TimingInfo[] timingInfo = new ThreadSafeSRProcessor.TimingInfo[1];
         
         ThreadSafeSRProcessor.InferenceCallback inferenceCallback = new ThreadSafeSRProcessor.InferenceCallback() {
             @Override
             public void onResult(Bitmap resultImage, long inferenceTime) {
                 synchronized (lock) {
                     result[0] = resultImage;
+                    completed[0] = true;
+                    lock.notify();
+                }
+            }
+            
+            @Override
+            public void onResultWithTiming(Bitmap resultImage, ThreadSafeSRProcessor.TimingInfo timing) {
+                synchronized (lock) {
+                    result[0] = resultImage;
+                    timingInfo[0] = timing;
                     completed[0] = true;
                     lock.notify();
                 }
@@ -168,12 +192,30 @@ public class ProcessingController {
             }
         }
         
+        // Store timing info if available
+        if (timingInfo[0] != null) {
+            lastTimingInfo = timingInfo[0];
+        }
+        
         return result[0];
     }
     
+    // Store last timing info
+    private ThreadSafeSRProcessor.TimingInfo lastTimingInfo;
+    
     private void completeProcessing(PerformanceMonitor.InferenceStats stats, Bitmap resultBitmap, 
                                   long totalTime, ProcessingCallback callback) {
-        stats.inferenceTime = totalTime;
+        stats.totalTime = totalTime;
+        
+        // Update with detailed timing if available
+        if (lastTimingInfo != null) {
+            stats.preprocessingTime = lastTimingInfo.preprocessTime;
+            stats.inferenceTime = lastTimingInfo.inferenceTime;
+            stats.outputConversionTime = lastTimingInfo.postprocessTime;
+        } else {
+            // If no detailed timing, use total time as inference time
+            stats.inferenceTime = totalTime;
+        }
         
         if (resultBitmap != null) {
             stats.outputWidth = resultBitmap.getWidth();

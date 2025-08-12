@@ -674,10 +674,28 @@ public class ThreadSafeSRProcessor {
         }
     }
     
+    public static class TimingInfo {
+        public long preprocessTime;
+        public long inferenceTime;
+        public long postprocessTime;
+        public long totalTime;
+        
+        public TimingInfo(long preprocess, long inference, long postprocess, long total) {
+            this.preprocessTime = preprocess;
+            this.inferenceTime = inference;
+            this.postprocessTime = postprocess;
+            this.totalTime = total;
+        }
+    }
+    
     public interface InferenceCallback {
         void onResult(Bitmap result, long inferenceTime);
         void onError(String error);
         default void onModeFallback(ProcessingMode requestedMode, ProcessingMode actualMode) {}
+        default void onResultWithTiming(Bitmap result, TimingInfo timing) {
+            // Default implementation calls the old method for backward compatibility
+            onResult(result, timing.totalTime);
+        }
     }
     
     public void processImage(Bitmap inputBitmap, InferenceCallback callback) {
@@ -735,8 +753,11 @@ public class ThreadSafeSRProcessor {
                 
                 long totalStartTime = System.currentTimeMillis();
                 
+                // Track preprocessing time
+                long preprocessStart = System.currentTimeMillis();
                 ensureBuffersAreCorrectSize();
                 convertBitmapToBuffer(resizedInput);
+                long preprocessTime = System.currentTimeMillis() - preprocessStart;
                 
                 // Rewind the appropriate buffers
                 if (inputBuffer != null) {
@@ -756,6 +777,7 @@ public class ThreadSafeSRProcessor {
                 String accelerator = getAcceleratorInfo();
                 Log.d(TAG, "Running inference on " + accelerator + " (actual mode: " + currentMode + ")");
                 
+                long pureInferenceTime = 0;
                 try {
                     long inferenceStart = System.currentTimeMillis();
                     
@@ -778,7 +800,7 @@ public class ThreadSafeSRProcessor {
                     ByteBuffer inputBuf = (inputBuffer != null) ? inputBuffer.getBuffer() : inputByteBuffer;
                     ByteBuffer outputBuf = (outputBuffer != null) ? outputBuffer.getBuffer() : outputByteBuffer;
                     currentInterpreter.run(inputBuf, outputBuf);
-                    long pureInferenceTime = System.currentTimeMillis() - inferenceStart;
+                    pureInferenceTime = System.currentTimeMillis() - inferenceStart;
                     
                     // NPU性能分析
                     if (currentMode == ProcessingMode.NPU) {
@@ -831,14 +853,16 @@ public class ThreadSafeSRProcessor {
                 long outputTime = System.currentTimeMillis() - outputStart;
                 
                 long totalTime = System.currentTimeMillis() - totalStartTime;
-                Log.d(TAG, "Detailed timing - Output conversion: " + outputTime + "ms, Total: " + totalTime + "ms");
+                Log.d(TAG, "Detailed timing - Preprocessing: " + preprocessTime + "ms, Inference: " + pureInferenceTime + "ms, Output conversion: " + outputTime + "ms, Total: " + totalTime + "ms");
                 
                 // 釋放中間結果
                 if (resizedInput != inputBitmap && !resizedInput.isRecycled()) {
                     resizedInput.recycle();
                 }
                 
-                callback.onResult(resultBitmap, totalTime);
+                // Create timing info and call the new callback method
+                TimingInfo timingInfo = new TimingInfo(preprocessTime, pureInferenceTime, outputTime, totalTime);
+                callback.onResultWithTiming(resultBitmap, timingInfo);
                 isProcessingFlag = false;
                 
             } catch (Exception e) {

@@ -13,6 +13,9 @@ public class TileProcessor {
     private int outputScale; // 動態計算的輸出倍率
     private int overlapPixels; // 來自配置的overlap像素數
     
+    // Track last tile count for reporting
+    private int lastTileCount = 0;
+    
     public TileProcessor(ThreadSafeSRProcessor processor) {
         this.srProcessor = processor;
         
@@ -97,6 +100,9 @@ public class TileProcessor {
         int processedTiles = 0;
         int totalTiles = tilesX * tilesY;
         long totalTileTime = 0;
+        
+        // Store tile count for reporting
+        lastTileCount = totalTiles;
         
         for (int y = 0; y < tilesY; y++) {
             for (int x = 0; x < tilesX; x++) {
@@ -275,6 +281,13 @@ public class TileProcessor {
     
     public interface ProcessCallback {
         void onProgress(int completed, int total);
+    }
+    
+    /**
+     * Get the number of tiles used in the last processing
+     */
+    public int getLastTileCount() {
+        return lastTileCount;
     }
     
     /**

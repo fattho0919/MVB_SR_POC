@@ -33,9 +33,9 @@ public class HybridSRProcessor {
     private static final String TAG = "HybridSRProcessor";
     
     // Timeouts
-    private static final int INSTANT_MODE_TIMEOUT_MS = 10000;  // 10 seconds for CPU
-    private static final int BACKGROUND_TIMEOUT_MS = 30000;   // 30 seconds for GPU/NPU
-    
+    private static final int INSTANT_MODE_TIMEOUT_MS = 30000;  // 30 seconds for CPU
+    private static final int BACKGROUND_TIMEOUT_MS = 60000;   // 60 seconds for GPU/NPU
+
     // Processing modes
     public enum ProcessingMode {
         CPU, GPU, NPU

@@ -59,6 +59,23 @@
             android:textColor="@color/purple_700" />
             
     </LinearLayout>
+    
+    <!-- Detailed Processing Info (auto-hide) -->
+    <TextView
+        android:id="@+id/tvDetailedInfo"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:layout_marginHorizontal="8dp"
+        android:padding="8dp"
+        android:background="@drawable/rounded_background"
+        android:text=""
+        android:textSize="11sp"
+        android:textColor="@android:color/darker_gray"
+        android:fontFamily="monospace"
+        android:visibility="gone"
+        android:maxLines="2"
+        android:ellipsize="end" />
 
     <!-- Button Container - Ultra Compact Design -->
     <LinearLayout
