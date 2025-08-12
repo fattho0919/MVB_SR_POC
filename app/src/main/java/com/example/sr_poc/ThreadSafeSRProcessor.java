@@ -60,6 +60,7 @@ public class ThreadSafeSRProcessor {
     
     private boolean isInitialized = false;
     private ProcessingMode currentMode = ProcessingMode.CPU;
+    private volatile boolean isProcessingFlag = false;
     
     // 當前活躍的解釋器
     private Interpreter currentInterpreter;
@@ -115,7 +116,7 @@ public class ThreadSafeSRProcessor {
                 Log.d(TAG, "Initializing SR processor with tri-mode setup (GPU/CPU/NPU)");
                 long initStartTime = System.currentTimeMillis();
                 
-                String modelPath = configManager.getDefaultModelPath();
+                String modelPath = configManager.getSelectedModelPath();
                 ByteBuffer tfliteModel = FileUtil.loadMappedFile(context, modelPath);
                 Log.d(TAG, "Model loaded: " + modelPath + " (" + (tfliteModel.capacity() / 1024) + "KB)");
                 
@@ -701,6 +702,7 @@ public class ThreadSafeSRProcessor {
             return;
         }
         
+        isProcessingFlag = true;
         srHandler.post(() -> {
             try {
                 Log.d(TAG, "Processing image: " + inputBitmap.getWidth() + "x" + inputBitmap.getHeight());
@@ -759,7 +761,7 @@ public class ThreadSafeSRProcessor {
                     
                     // NPU性能診斷
                     if (currentMode == ProcessingMode.NPU) {
-                        String modelPath = configManager.getDefaultModelPath();
+                        String modelPath = configManager.getSelectedModelPath();
                         boolean isFloat16Model = modelPath.contains("float16");
                         boolean allowFp16 = configManager.isAllowFp16OnNpu();
                         
@@ -837,9 +839,11 @@ public class ThreadSafeSRProcessor {
                 }
                 
                 callback.onResult(resultBitmap, totalTime);
+                isProcessingFlag = false;
                 
             } catch (Exception e) {
                 Log.e(TAG, "Error during inference", e);
+                isProcessingFlag = false;
                 callback.onError("Inference failed: " + e.getMessage());
             }
         });
@@ -1233,6 +1237,10 @@ public class ThreadSafeSRProcessor {
         releaseInterpreter(ProcessingMode.GPU);
         releaseInterpreter(ProcessingMode.CPU);
         releaseInterpreter(ProcessingMode.NPU);
+    }
+    
+    public boolean isProcessing() {
+        return isProcessingFlag;
     }
     
     public void close() {

@@ -96,6 +96,7 @@ public class HybridSRProcessor {
     private final AtomicBoolean isInitializing = new AtomicBoolean(false);
     private final AtomicBoolean quickStartReady = new AtomicBoolean(false);
     private final AtomicInteger availableModes = new AtomicInteger(0);
+    private final AtomicBoolean isProcessingFlag = new AtomicBoolean(false);
     
     // Model buffer
     private ByteBuffer modelBuffer;
@@ -129,7 +130,7 @@ public class HybridSRProcessor {
         executorService.execute(() -> {
             try {
                 Log.d(TAG, "Loading model into memory");
-                String modelPath = configManager.getDefaultModelPath();
+                String modelPath = configManager.getSelectedModelPath();
                 modelBuffer = FileUtil.loadMappedFile(context, modelPath);
                 Log.d(TAG, "Model loaded: " + modelPath + " (" + (modelBuffer.capacity() / 1024) + "KB)");
                 
@@ -311,7 +312,7 @@ public class HybridSRProcessor {
             
             // Validate GPU first
             HardwareValidator.ValidationResult gpuValidation = 
-                HardwareValidator.validateGPU(context, configManager.getDefaultModelPath());
+                HardwareValidator.validateGPU(context, configManager.getSelectedModelPath());
             
             if (!gpuValidation.isAvailable) {
                 Log.w(TAG, "GPU not available: " + gpuValidation.failureReason);
@@ -553,6 +554,13 @@ public class HybridSRProcessor {
      */
     public int getAvailableModesCount() {
         return availableModes.get();
+    }
+    
+    /**
+     * Checks if processing is currently in progress.
+     */
+    public boolean isProcessing() {
+        return isProcessingFlag.get() || (fullProcessor != null && fullProcessor.isProcessing());
     }
     
     /**

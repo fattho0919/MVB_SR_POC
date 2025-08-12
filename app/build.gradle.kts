@@ -7,7 +7,7 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.example.mvb_sr_poc"
+        applicationId = "com.example.sr_poc"
         minSdk = 24
         targetSdk = 36
         versionCode = 2

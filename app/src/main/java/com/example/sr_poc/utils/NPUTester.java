@@ -152,7 +152,7 @@ public class NPUTester {
         boolean useNpuForQuantized = configManager.isUseNpuForQuantized();
         Log.d(TAG, "Use NPU for quantized models: " + useNpuForQuantized);
         
-        String modelPath = configManager.getDefaultModelPath();
+        String modelPath = configManager.getSelectedModelPath();
         if (modelPath.contains("integer_quant")) {
             Log.d(TAG, "INT8 quantized model detected");
             Log.d(TAG, "Expected behavior: NPU should handle INT8 operations natively");

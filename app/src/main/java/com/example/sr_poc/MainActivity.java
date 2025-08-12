@@ -4,9 +4,12 @@ import android.content.Intent;
 import android.graphics.Bitmap;
 import android.os.Bundle;
 import android.view.View;
+import android.widget.AdapterView;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.ImageView;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.util.Log;
@@ -20,6 +23,11 @@ import android.widget.ProgressBar;
 import android.graphics.Color;
 import androidx.appcompat.app.AlertDialog;
 
+import com.example.sr_poc.R;
+
+import java.util.ArrayList;
+import java.util.List;
+
 public class MainActivity extends AppCompatActivity implements ComponentCallbacks2 {
     
     private ImageView imageView;
@@ -29,10 +37,14 @@ public class MainActivity extends AppCompatActivity implements ComponentCallback
     private Button btnCpuProcess;
     private Button btnNpuProcess;
     private Button btnResetImage;
-    private Button btnNpuTest;
     private CheckBox cbEnableTiling;
     private TextView tvInferenceTime;
     private TextView tvImageInfo;
+    
+    // Model selection UI
+    private Spinner spinnerModelSelection;
+    private String currentModelPath;
+    private ArrayAdapter<String> modelAdapter;
     
     private ImageManager imageManager;
     private ThreadSafeSRProcessor srProcessor;
@@ -64,10 +76,10 @@ public class MainActivity extends AppCompatActivity implements ComponentCallback
         btnCpuProcess = findViewById(R.id.btnCpuProcess);
         btnNpuProcess = findViewById(R.id.btnNpuProcess);
         btnResetImage = findViewById(R.id.btnResetImage);
-        btnNpuTest = findViewById(R.id.btnNpuTest);
         cbEnableTiling = findViewById(R.id.cbEnableTiling);
         tvInferenceTime = findViewById(R.id.tvInferenceTime);
         tvImageInfo = findViewById(R.id.tvImageInfo);
+        spinnerModelSelection = findViewById(R.id.spinnerModelSelection);
         
         // 初始化時禁用所有按鈕並顯示 initing 狀態
         setButtonsEnabled(false);
@@ -83,6 +95,9 @@ public class MainActivity extends AppCompatActivity implements ComponentCallback
         // 初始化配置管理器
         configManager = ConfigManager.getInstance(this);
         Log.d("MainActivity", "Configuration loaded: " + configManager.getConfigSummary());
+        
+        // Setup model selection
+        setupModelSelection();
         
         // 設置UI預設值
         cbEnableTiling.setChecked(configManager.isDefaultTilingEnabled());
@@ -105,13 +120,124 @@ public class MainActivity extends AppCompatActivity implements ComponentCallback
         Log.d("MainActivity", "Running on: " + acceleratorInfo);
     }
     
+    private void setupModelSelection() {
+        // Get available models from ConfigManager
+        List<String> availableModels = configManager.getAvailableModels();
+        List<String> modelDisplayNames = new ArrayList<>();
+        
+        // Create display names (full filenames with extensions)
+        for (String modelPath : availableModels) {
+            modelDisplayNames.add(configManager.getModelDisplayName(modelPath));
+        }
+        
+        // Create adapter with dynamic model list
+        modelAdapter = new ArrayAdapter<>(this, 
+            android.R.layout.simple_spinner_item, modelDisplayNames);
+        modelAdapter.setDropDownViewResource(
+            android.R.layout.simple_spinner_dropdown_item);
+        spinnerModelSelection.setAdapter(modelAdapter);
+        
+        // Set current selection
+        currentModelPath = configManager.getSelectedModelPath();
+        int currentIndex = availableModels.indexOf(currentModelPath);
+        if (currentIndex >= 0) {
+            spinnerModelSelection.setSelection(currentIndex);
+        }
+        
+        spinnerModelSelection.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, 
+                                       int position, long id) {
+                List<String> models = configManager.getAvailableModels();
+                if (position < models.size()) {
+                    String newModelPath = models.get(position);
+                    if (!newModelPath.equals(currentModelPath)) {
+                        onModelChanged(newModelPath);
+                    }
+                }
+            }
+            
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {}
+        });
+    }
+    
+    private void onModelChanged(String newModelPath) {
+        // Prevent model change during processing
+        if (isProcessing()) {
+            Toast.makeText(this, "Cannot change model during processing", 
+                          Toast.LENGTH_SHORT).show();
+            // Reset spinner to current selection
+            int currentIndex = configManager.getAvailableModels()
+                                           .indexOf(currentModelPath);
+            spinnerModelSelection.setSelection(currentIndex);
+            return;
+        }
+        
+        currentModelPath = newModelPath;
+        configManager.setSelectedModelPath(newModelPath);
+        
+        String modelName = configManager.getModelDisplayName(newModelPath);
+        Toast.makeText(this, "Switching to " + modelName + "...", 
+                      Toast.LENGTH_SHORT).show();
+        
+        // Disable UI during model switching
+        setButtonsEnabled(false);
+        tvInferenceTime.setText("Loading model...");
+        
+        // Perform cleanup and reinitialization in background
+        new Thread(() -> {
+            try {
+                // Step 1: Close existing processors (releases memory)
+                if (hybridProcessor != null) {
+                    hybridProcessor.close();
+                    hybridProcessor = null;
+                }
+                if (srProcessor != null) {
+                    srProcessor.close();
+                    srProcessor = null;
+                }
+                
+                // Step 2: Force garbage collection to free memory
+                System.gc();
+                System.runFinalization();
+                
+                // Step 3: Small delay to ensure resources are freed
+                Thread.sleep(100);
+                
+                // Step 4: Reinitialize with new model
+                runOnUiThread(() -> {
+                    if (useHybridInit) {
+                        initializeHybridProcessor();
+                    } else {
+                        initializeOriginalProcessor();
+                    }
+                    Toast.makeText(this, "Model loaded: " + modelName, 
+                                 Toast.LENGTH_SHORT).show();
+                });
+            } catch (Exception e) {
+                Log.e("MainActivity", "Error switching model", e);
+                runOnUiThread(() -> {
+                    Toast.makeText(this, "Failed to load model", 
+                                 Toast.LENGTH_SHORT).show();
+                    setButtonsEnabled(true);
+                });
+            }
+        }).start();
+    }
+    
+    // Helper method to check if processing is in progress
+    private boolean isProcessing() {
+        return (hybridProcessor != null && hybridProcessor.isProcessing()) ||
+               (srProcessor != null && srProcessor.isProcessing());
+    }
+    
     private void setupListeners() {
         btnSwitchImage.setOnClickListener(v -> switchToNextImage());
         btnGpuProcess.setOnClickListener(v -> performSuperResolutionWithGpu());
         btnCpuProcess.setOnClickListener(v -> performSuperResolutionWithCpu());
         btnNpuProcess.setOnClickListener(v -> performSuperResolutionWithNpu());
         btnResetImage.setOnClickListener(v -> resetToOriginalImage());
-        btnNpuTest.setOnClickListener(v -> startNpuTest());
         
         // 長按checkbox顯示配置摘要
         cbEnableTiling.setOnLongClickListener(v -> {
@@ -285,7 +411,6 @@ public class MainActivity extends AppCompatActivity implements ComponentCallback
         btnCpuProcess.setEnabled(enabled);
         btnNpuProcess.setEnabled(enabled);
         btnResetImage.setEnabled(enabled);
-        btnNpuTest.setEnabled(true); // NPU Test button is always enabled
         cbEnableTiling.setEnabled(enabled);
     }
     
@@ -332,11 +457,6 @@ public class MainActivity extends AppCompatActivity implements ComponentCallback
     @Override
     protected void onPause() {
         super.onPause();
-    }
-    
-    private void startNpuTest() {
-        Intent intent = new Intent(this, NPUModelTestActivity.class);
-        startActivity(intent);
     }
     
     /**

@@ -1,6 +1,7 @@
 package com.example.sr_poc;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.util.Log;
 
 import org.json.JSONArray;
@@ -12,6 +13,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 import com.example.sr_poc.utils.Constants;
@@ -27,6 +29,11 @@ public class ConfigManager {
     // Cached values for performance
     private String defaultModelPath;
     private List<String> alternativeModels;
+    
+    // Dynamic model selection
+    private String selectedModelPath = null;
+    private SharedPreferences preferences;
+    private List<String> discoveredModels = new ArrayList<>();
     private int expectedScaleFactor;
     private int channels;
     private int defaultNumThreads;
@@ -65,6 +72,7 @@ public class ConfigManager {
     private ConfigManager(Context context) {
         this.context = context.getApplicationContext();
         loadConfig();
+        initPreferences();
     }
     
     public static synchronized ConfigManager getInstance(Context context) {
@@ -83,6 +91,66 @@ public class ConfigManager {
         } catch (Exception e) {
             Log.e(TAG, "Failed to load configuration, using defaults", e);
             useDefaultValues();
+        }
+    }
+    
+    // Initialize preferences and discover models dynamically
+    private void initPreferences() {
+        preferences = context.getSharedPreferences("sr_prefs", Context.MODE_PRIVATE);
+        discoverAvailableModels();
+        selectedModelPath = preferences.getString("selected_model", defaultModelPath);
+        
+        // Validate selected model still exists
+        if (!discoveredModels.contains(selectedModelPath)) {
+            selectedModelPath = !discoveredModels.isEmpty() ? 
+                discoveredModels.get(0) : defaultModelPath;
+        }
+    }
+    
+    // Discover all .tflite files in assets/models folder
+    private void discoverAvailableModels() {
+        discoveredModels.clear();
+        try {
+            String[] modelFiles = context.getAssets().list("models");
+            if (modelFiles != null) {
+                for (String file : modelFiles) {
+                    if (file.endsWith(".tflite")) {
+                        discoveredModels.add("models/" + file);
+                        Log.d(TAG, "Discovered model: " + file);
+                    }
+                }
+            }
+            // Sort models by filename for consistent ordering
+            Collections.sort(discoveredModels);
+        } catch (IOException e) {
+            Log.e(TAG, "Failed to discover models", e);
+            // Fallback to default if discovery fails
+            if (discoveredModels.isEmpty() && alternativeModels != null) {
+                discoveredModels.addAll(alternativeModels);
+            }
+        }
+    }
+    
+    public List<String> getAvailableModels() {
+        return new ArrayList<>(discoveredModels);
+    }
+    
+    public String getModelDisplayName(String modelPath) {
+        // Return full filename with extension
+        if (modelPath == null) return "Unknown";
+        int lastSlash = modelPath.lastIndexOf('/');
+        return lastSlash >= 0 ? modelPath.substring(lastSlash + 1) : modelPath;
+    }
+    
+    public String getSelectedModelPath() {
+        return selectedModelPath != null ? selectedModelPath : defaultModelPath;
+    }
+    
+    public void setSelectedModelPath(String modelPath) {
+        if (discoveredModels.contains(modelPath)) {
+            selectedModelPath = modelPath;
+            preferences.edit().putString("selected_model", modelPath).apply();
+            Log.d(TAG, "Model changed to: " + getModelDisplayName(modelPath));
         }
     }
     

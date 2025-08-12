@@ -64,7 +64,7 @@
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
+        android:layout_marginTop="2dp"
         android:orientation="vertical">
 
         <!-- Main Controls Row -->
@@ -159,18 +159,24 @@
                 android:layout_height="wrap_content"
                 android:text="Enable Tiling"
                 android:textSize="10sp"
-                android:checked="true" />
-
-            <!-- NPU Test Button -->
-            <Button
-                android:id="@+id/btnNpuTest"
+                android:checked="true"
+                android:layout_marginEnd="8dp" />
+            
+            <!-- Model Selection -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Model: "
+                android:textSize="10sp"
+                android:layout_marginEnd="4dp" />
+                
+            <Spinner
+                android:id="@+id/spinnerModelSelection"
                 android:layout_width="wrap_content"
                 android:layout_height="28dp"
-                android:layout_marginStart="8dp"
-                android:background="@android:color/holo_orange_light"
-                android:padding="4dp"
-                android:text="NPU Test"
-                android:textColor="@android:color/white"
+                android:minWidth="120dp"
+                android:background="@android:color/white"
+                android:padding="2dp"
                 android:textSize="10sp" />
 
         </LinearLayout>
