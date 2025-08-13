@@ -57,8 +57,16 @@ public class ProcessingController {
                 Bitmap resultBitmap;
                 
                 // Determine processing method
+                // Check if this is a 1080p model processing 1080p image
+                String modelPath = configManager.getSelectedModelPath();
+                boolean is1080pModel = modelPath != null && modelPath.contains("1080p");
+                boolean is1080pImage = (currentBitmap.getWidth() == 1920 && currentBitmap.getHeight() == 1080) ||
+                                      (currentBitmap.getWidth() == 1080 && currentBitmap.getHeight() == 1920);
+                
+                // Don't use tiling for 1080p models with 1080p images
                 boolean shouldUseTiling = forceTiling || 
-                    TileProcessor.shouldUseTileProcessing(currentBitmap, configManager);
+                    (TileProcessor.shouldUseTileProcessing(currentBitmap, configManager) && 
+                     !(is1080pModel && is1080pImage));
                 
                 if (shouldUseTiling) {
                     callback.onProgress("Using tile processing for large image");

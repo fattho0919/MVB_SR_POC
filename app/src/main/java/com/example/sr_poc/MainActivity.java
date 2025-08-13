@@ -192,8 +192,15 @@ public class MainActivity extends AppCompatActivity implements ComponentCallback
         currentModelPath = newModelPath;
         configManager.setSelectedModelPath(newModelPath);
         
+        // Check if this is a 1080p model and switch image set accordingly
+        boolean is1080pModel = newModelPath.contains("1080p");
+        if (imageManager != null) {
+            imageManager.setUse1080p(is1080pModel);
+        }
+        
         String modelName = configManager.getModelDisplayName(newModelPath);
-        Toast.makeText(this, "Switching to " + modelName + "...", 
+        String imageResolution = is1080pModel ? " (1080p images)" : " (720p images)";
+        Toast.makeText(this, "Switching to " + modelName + imageResolution, 
                       Toast.LENGTH_SHORT).show();
         
         // Disable UI during model switching
@@ -309,6 +316,20 @@ public class MainActivity extends AppCompatActivity implements ComponentCallback
     }
     
     private void performSuperResolutionWithMode(ThreadSafeSRProcessor.ProcessingMode processingMode) {
+        // Check model-image compatibility
+        if (currentModelPath != null && imageManager != null) {
+            boolean is1080pModel = currentModelPath.contains("1080p");
+            boolean is1080pImage = imageManager.isUsing1080p();
+            
+            if (is1080pModel != is1080pImage) {
+                String errorMsg = is1080pModel ? 
+                    "1080p model requires 1080p images. Please select a 1080p model first." :
+                    "720p model requires 720p images. Please select a 720p model first.";
+                Toast.makeText(this, errorMsg, Toast.LENGTH_LONG).show();
+                return;
+            }
+        }
+        
         // Track performance
         long startTime = System.currentTimeMillis();
         
@@ -443,8 +464,10 @@ public class MainActivity extends AppCompatActivity implements ComponentCallback
             imageView.setVisibility(View.VISIBLE);
             imageView.setImageBitmap(bitmap);
             
-            String imageInfo = String.format("%s (%d/%d)", 
+            String resolution = imageManager.isUsing1080p() ? "[1080p]" : "[720p]";
+            String imageInfo = String.format("%s %s (%d/%d)", 
                 imageManager.getCurrentImageName(),
+                resolution,
                 imageManager.getCurrentIndex() + 1,
                 imageManager.getTotalImages());
             tvImageInfo.setText(imageInfo);

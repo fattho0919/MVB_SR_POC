@@ -21,6 +21,7 @@ public class ImageManager {
     private List<String> imageNames;
     private int currentIndex;
     private Bitmap currentBitmap;
+    private boolean use1080p = false;  // Flag to use 1080p images
     
     public ImageManager(Context context) {
         this.context = context;
@@ -53,7 +54,8 @@ public class ImageManager {
     
     private void loadCurrentImage() {
         String imageName = imageNames.get(currentIndex);
-        String imagePath = Constants.IMAGES_PATH + imageName;
+        // Use 1080p path if flag is set
+        String imagePath = use1080p ? "images/1080p/" + imageName : Constants.IMAGES_PATH + imageName;
         
         try (InputStream inputStream = context.getAssets().open(imagePath)) {
             currentBitmap = BitmapFactory.decodeStream(inputStream);
@@ -104,5 +106,25 @@ public class ImageManager {
     
     public List<String> getAllImageNames() {
         return new ArrayList<>(imageNames);
+    }
+    
+    /**
+     * Sets whether to use 1080p images based on the model.
+     * Only 1080p models should use 1080p images.
+     */
+    public void setUse1080p(boolean use1080p) {
+        if (this.use1080p != use1080p) {
+            this.use1080p = use1080p;
+            Log.d(TAG, "Switched to " + (use1080p ? "1080p" : "720p") + " images");
+            // Reload current image with new resolution
+            loadCurrentImage();
+        }
+    }
+    
+    /**
+     * Returns whether currently using 1080p images.
+     */
+    public boolean isUsing1080p() {
+        return use1080p;
     }
 }
