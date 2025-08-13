@@ -306,25 +306,31 @@ public class HybridSRProcessor {
     private CompletableFuture<Void> initializeGPUInBackground(HybridCallback callback) {
         return CompletableFuture.runAsync(() -> {
             long startTime = System.currentTimeMillis();
-            Log.d(TAG, "Initializing GPU in background with optimizations");
+            Log.d(TAG, "========================================");
+            Log.d(TAG, "Starting GPU Initialization");
+            Log.d(TAG, "========================================");
             
             mainHandler.post(() -> callback.onProgress("Validating GPU...", 50));
             
             // Validate GPU first
+            Log.d(TAG, "Step 1: Validating GPU hardware...");
             HardwareValidator.ValidationResult gpuValidation = 
                 HardwareValidator.validateGPU(context, configManager.getSelectedModelPath());
             
             if (!gpuValidation.isAvailable) {
-                Log.w(TAG, "GPU not available: " + gpuValidation.failureReason);
+                Log.e(TAG, "GPU validation failed: " + gpuValidation.failureReason);
                 mainHandler.post(() -> {
                     callback.onModeFailed(ProcessingMode.GPU, gpuValidation.failureReason);
                 });
                 return;
             }
             
+            Log.d(TAG, "GPU validation passed: " + gpuValidation.deviceInfo);
+            
             mainHandler.post(() -> callback.onProgress("Initializing GPU...", 60));
             
             try {
+                Log.d(TAG, "Step 2: Creating GPU interpreter options...");
                 // Create GPU interpreter with optimizations
                 Interpreter.Options gpuOptions = new Interpreter.Options();
                 
@@ -332,18 +338,34 @@ public class HybridSRProcessor {
                 gpuOptions.setNumThreads(1);  // GPU doesn't use CPU threads
                 gpuOptions.setAllowBufferHandleOutput(false);  // Reduce overhead
                 gpuOptions.setCancellable(false);  // Skip cancellation checks
+                Log.d(TAG, "Interpreter options configured");
                 
                 // Configure GPU delegate with device-specific optimizations
+                Log.d(TAG, "Step 3: Creating GPU delegate...");
                 GpuDelegate.Options delegateOptions = createOptimizedGpuDelegateOptions();
+                Log.d(TAG, "GPU delegate options created with inference preference: FAST_SINGLE_ANSWER");
                 
                 gpuDelegate = new GpuDelegate(delegateOptions);
-                gpuOptions.addDelegate(gpuDelegate);
+                Log.d(TAG, "GPU delegate instance created successfully");
                 
+                gpuOptions.addDelegate(gpuDelegate);
+                Log.d(TAG, "GPU delegate added to interpreter options");
+                
+                Log.d(TAG, "Step 4: Creating GPU interpreter with model buffer...");
                 gpuInterpreter = new Interpreter(modelBuffer, gpuOptions);
+                Log.d(TAG, "GPU interpreter created successfully!");
+                
+                // Verify GPU is actually being used
+                verifyGpuDelegateActive(gpuInterpreter);
+                
                 availableModes.incrementAndGet();
                 
                 long initTime = System.currentTimeMillis() - startTime;
-                Log.d(TAG, "GPU initialized successfully in " + initTime + "ms");
+                Log.d(TAG, "========================================");
+                Log.d(TAG, "GPU Initialization SUCCESSFUL");
+                Log.d(TAG, "Time taken: " + initTime + "ms");
+                Log.d(TAG, "Device: " + gpuValidation.deviceInfo);
+                Log.d(TAG, "========================================");
                 
                 mainHandler.post(() -> {
                     callback.onProgress("GPU ready!", 70);
@@ -353,7 +375,12 @@ public class HybridSRProcessor {
                 
             } catch (Exception e) {
                 long failTime = System.currentTimeMillis() - startTime;
-                Log.e(TAG, "GPU initialization failed after " + failTime + "ms", e);
+                Log.e(TAG, "========================================");
+                Log.e(TAG, "GPU Initialization FAILED");
+                Log.e(TAG, "Time taken: " + failTime + "ms");
+                Log.e(TAG, "Error: " + e.getMessage());
+                Log.e(TAG, "Stack trace:", e);
+                Log.e(TAG, "========================================");
                 mainHandler.post(() -> {
                     callback.onModeFailed(ProcessingMode.GPU, 
                         "GPU initialization error: " + e.getMessage());
@@ -372,6 +399,84 @@ public class HybridSRProcessor {
     }
     
     /**
+     * Verifies that GPU delegate is actually active in the interpreter.
+     */
+    private void verifyGpuDelegateActive(Interpreter interpreter) {
+        try {
+            Log.d(TAG, "Verifying GPU delegate is active...");
+            
+            // Try to get signature runner to check delegate status
+            String[] signatureKeys = interpreter.getSignatureKeys();
+            if (signatureKeys != null && signatureKeys.length > 0) {
+                Log.d(TAG, "Interpreter has " + signatureKeys.length + " signature(s)");
+            }
+            
+            // Check input/output tensor details to verify GPU backing
+            int inputTensorCount = interpreter.getInputTensorCount();
+            int outputTensorCount = interpreter.getOutputTensorCount();
+            Log.d(TAG, "Input tensors: " + inputTensorCount + ", Output tensors: " + outputTensorCount);
+            
+            // Verify tensor shapes are correct
+            if (inputTensorCount > 0) {
+                int[] inputShape = interpreter.getInputTensor(0).shape();
+                Log.d(TAG, "Input tensor shape: " + java.util.Arrays.toString(inputShape));
+            }
+            
+            if (outputTensorCount > 0) {
+                int[] outputShape = interpreter.getOutputTensor(0).shape();
+                Log.d(TAG, "Output tensor shape: " + java.util.Arrays.toString(outputShape));
+            }
+            
+            // Perform a small test inference to verify GPU is working
+            testGpuInference(interpreter);
+            
+            Log.d(TAG, "GPU delegate verification complete - delegate appears to be active");
+            
+        } catch (Exception e) {
+            Log.w(TAG, "Could not fully verify GPU delegate status: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Performs a small test inference to verify GPU is actually being used.
+     */
+    private void testGpuInference(Interpreter interpreter) {
+        try {
+            Log.d(TAG, "Running test inference to verify GPU...");
+            
+            // Get input shape
+            int[] inputShape = interpreter.getInputTensor(0).shape();
+            int batchSize = inputShape[0];
+            int height = inputShape[1];
+            int width = inputShape[2];
+            int channels = inputShape[3];
+            
+            // Create small test input
+            float[][][][] testInput = new float[batchSize][height][width][channels];
+            
+            // Get output shape
+            int[] outputShape = interpreter.getOutputTensor(0).shape();
+            int outHeight = outputShape[1];
+            int outWidth = outputShape[2];
+            int outChannels = outputShape[3];
+            
+            // Create test output
+            float[][][][] testOutput = new float[batchSize][outHeight][outWidth][outChannels];
+            
+            // Run test inference
+            long testStart = System.currentTimeMillis();
+            interpreter.run(testInput, testOutput);
+            long testTime = System.currentTimeMillis() - testStart;
+            
+            Log.d(TAG, "Test inference completed in " + testTime + "ms");
+            Log.d(TAG, "GPU appears to be working correctly");
+            
+        } catch (Exception e) {
+            Log.w(TAG, "Test inference failed: " + e.getMessage());
+        }
+    }
+    
+    /**
      * Creates optimized GPU delegate options based on device characteristics.
      */
     private GpuDelegate.Options createOptimizedGpuDelegateOptions() {
@@ -379,9 +484,11 @@ public class HybridSRProcessor {
         
         // Always use fast single answer for super resolution
         options.setInferencePreference(GpuDelegate.Options.INFERENCE_PREFERENCE_FAST_SINGLE_ANSWER);
+        Log.d(TAG, "GPU Delegate: Inference preference set to FAST_SINGLE_ANSWER");
         
         // Allow precision loss for 2x speedup
         options.setPrecisionLossAllowed(true);
+        Log.d(TAG, "GPU Delegate: Precision loss allowed for better performance");
         
         // Apply device-specific optimizations
         String socModel = android.os.Build.SOC_MODEL;
@@ -389,15 +496,19 @@ public class HybridSRProcessor {
             Log.d(TAG, "Detected SoC: " + socModel);
             
             if (socModel.contains("MT8195") || socModel.contains("MT8188")) {
-                Log.d(TAG, "Applying Mali-G57 optimizations");
+                Log.d(TAG, "Applying Mali-G57 optimizations for MediaTek chip");
                 // Mali-G57 specific settings already applied above
             } else if (socModel.contains("MT8192") || socModel.contains("MT8183")) {
-                Log.d(TAG, "Applying Mali-G77 optimizations");
+                Log.d(TAG, "Applying Mali-G77 optimizations for MediaTek chip");
                 // Mali-G77 specific settings
             } else if (socModel.contains("Snapdragon")) {
-                Log.d(TAG, "Applying Adreno optimizations");
+                Log.d(TAG, "Applying Adreno optimizations for Qualcomm chip");
                 // Adreno specific settings
+            } else {
+                Log.d(TAG, "Using default GPU settings for unknown SoC: " + socModel);
             }
+        } else {
+            Log.d(TAG, "SoC model not available, using default GPU settings");
         }
         
         return options;

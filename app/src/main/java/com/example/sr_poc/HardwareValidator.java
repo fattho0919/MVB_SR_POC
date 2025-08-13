@@ -141,7 +141,18 @@ public class HardwareValidator {
      * Validates GPU availability with model compatibility checks.
      */
     public static ValidationResult validateGPU(Context context, String modelPath) {
-        Log.d(TAG, "Starting GPU validation");
+        Log.d(TAG, "========================================");
+        Log.d(TAG, "Starting comprehensive GPU validation");
+        Log.d(TAG, "========================================");
+        
+        // Log device information
+        Log.d(TAG, "Device Info:");
+        Log.d(TAG, "  Manufacturer: " + Build.MANUFACTURER);
+        Log.d(TAG, "  Model: " + Build.MODEL);
+        Log.d(TAG, "  Hardware: " + Build.HARDWARE);
+        Log.d(TAG, "  Board: " + Build.BOARD);
+        Log.d(TAG, "  SoC Model: " + Build.SOC_MODEL);
+        Log.d(TAG, "  Android Version: " + Build.VERSION.SDK_INT);
         
         // Check if running on emulator
         if (isEmulator()) {
@@ -150,9 +161,14 @@ public class HardwareValidator {
         }
         
         try {
+            Log.d(TAG, "Creating CompatibilityList to check GPU support...");
             CompatibilityList compatList = new CompatibilityList();
             
-            if (!compatList.isDelegateSupportedOnThisDevice()) {
+            boolean isGpuSupported = compatList.isDelegateSupportedOnThisDevice();
+            Log.d(TAG, "GPU delegate supported: " + isGpuSupported);
+            
+            if (!isGpuSupported) {
+                Log.e(TAG, "GPU delegate NOT supported on this device");
                 return ValidationResult.failure("GPU delegate not supported on this device");
             }
             
@@ -161,8 +177,16 @@ public class HardwareValidator {
                 return ValidationResult.failure("GPU does not support INT8 quantized models");
             }
             
-            // Get GPU info
+            // Get detailed GPU info
             String gpuInfo = getGPUInfo();
+            Log.d(TAG, "Detected GPU: " + gpuInfo);
+            
+            // Try to get best GPU device from compatibility list
+            String bestDevice = getBestGpuDevice(compatList);
+            if (bestDevice != null) {
+                Log.d(TAG, "Best GPU device from CompatibilityList: " + bestDevice);
+                gpuInfo = gpuInfo + " (" + bestDevice + ")";
+            }
             
             ValidationResult result = ValidationResult.success(gpuInfo);
             
@@ -172,13 +196,39 @@ public class HardwareValidator {
                 result.addWarning("Samsung devices may have GPU stability issues on Android < 11");
             }
             
-            Log.d(TAG, "GPU validation successful");
+            Log.d(TAG, "========================================");
+            Log.d(TAG, "GPU validation SUCCESSFUL");
+            Log.d(TAG, "GPU Info: " + gpuInfo);
+            Log.d(TAG, "========================================");
             return result;
             
         } catch (Exception e) {
-            Log.e(TAG, "GPU validation error", e);
+            Log.e(TAG, "========================================");
+            Log.e(TAG, "GPU validation FAILED with error", e);
+            Log.e(TAG, "Error message: " + e.getMessage());
+            Log.e(TAG, "========================================");
             return ValidationResult.failure("GPU validation error: " + e.getMessage());
         }
+    }
+    
+    /**
+     * Gets the best GPU device from compatibility list.
+     */
+    private static String getBestGpuDevice(CompatibilityList compatList) {
+        try {
+            // Use reflection to access best device if available
+            java.lang.reflect.Method method = compatList.getClass().getDeclaredMethod("getBestOptionsForThisDevice");
+            if (method != null) {
+                Object result = method.invoke(compatList);
+                if (result != null) {
+                    return result.toString();
+                }
+            }
+        } catch (Exception e) {
+            // Method not available in this version
+            Log.d(TAG, "Cannot get best GPU device info: " + e.getMessage());
+        }
+        return null;
     }
     
     /**

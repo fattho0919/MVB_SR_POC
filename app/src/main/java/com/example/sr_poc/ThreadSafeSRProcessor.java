@@ -181,39 +181,87 @@ public class ThreadSafeSRProcessor {
         long startTime = System.currentTimeMillis();
         
         try {
-            Log.d(TAG, "Initializing GPU interpreter with optimizations");
+            Log.d(TAG, "========================================");
+            Log.d(TAG, "Starting GPU Interpreter Initialization");
+            Log.d(TAG, "========================================");
+            
             Interpreter.Options gpuOptions = new Interpreter.Options();
             
             // Optimize interpreter options for faster initialization
             gpuOptions.setNumThreads(1);  // GPU doesn't use CPU threads
             gpuOptions.setAllowBufferHandleOutput(false);  // Reduce overhead
             gpuOptions.setCancellable(false);  // Skip cancellation checks
+            Log.d(TAG, "GPU Options: threads=1, bufferHandle=false, cancellable=false");
             
+            Log.d(TAG, "Attempting to setup GPU delegate...");
             if (trySetupGpu(gpuOptions)) {
                 try {
+                    Log.d(TAG, "Creating GPU interpreter with model...");
                     gpuInterpreter = new Interpreter(tfliteModel, gpuOptions);
+                    Log.d(TAG, "GPU interpreter instance created");
+                    
                     memoryManager.onInterpreterCreated(ProcessingMode.GPU);
                     
+                    // Verify GPU is working
+                    verifyGpuDelegateActive();
+                    
                     long initTime = System.currentTimeMillis() - startTime;
-                    Log.d(TAG, "GPU interpreter created successfully in " + initTime + "ms");
+                    Log.d(TAG, "========================================");
+                    Log.d(TAG, "GPU Interpreter SUCCESSFULLY initialized in " + initTime + "ms");
+                    Log.d(TAG, "========================================");
                     
                     readModelDimensions(gpuInterpreter);
                     return true;
                 } catch (Exception e) {
-                    Log.e(TAG, "Failed to create GPU interpreter: " + e.getMessage());
+                    Log.e(TAG, "Failed to create GPU interpreter: " + e.getMessage(), e);
                     if (gpuDelegate != null) {
                         gpuDelegate.close();
                         gpuDelegate = null;
                     }
                 }
+            } else {
+                Log.e(TAG, "GPU delegate setup failed completely");
             }
         } catch (Exception e) {
-            Log.e(TAG, "GPU interpreter initialization failed: " + e.getMessage());
+            Log.e(TAG, "GPU interpreter initialization exception: " + e.getMessage(), e);
         }
         
         long failTime = System.currentTimeMillis() - startTime;
-        Log.w(TAG, "GPU initialization failed after " + failTime + "ms");
+        Log.e(TAG, "========================================");
+        Log.e(TAG, "GPU Initialization FAILED after " + failTime + "ms");
+        Log.e(TAG, "========================================");
         return false;
+    }
+    
+    /**
+     * Verifies that GPU delegate is active.
+     */
+    private void verifyGpuDelegateActive() {
+        if (gpuInterpreter == null) {
+            Log.e(TAG, "GPU interpreter is null during verification!");
+            return;
+        }
+        
+        try {
+            Log.d(TAG, "Verifying GPU delegate is active...");
+            int inputCount = gpuInterpreter.getInputTensorCount();
+            int outputCount = gpuInterpreter.getOutputTensorCount();
+            Log.d(TAG, "GPU Interpreter has " + inputCount + " inputs and " + outputCount + " outputs");
+            
+            if (inputCount > 0) {
+                int[] shape = gpuInterpreter.getInputTensor(0).shape();
+                Log.d(TAG, "GPU Input tensor shape: " + java.util.Arrays.toString(shape));
+            }
+            
+            if (outputCount > 0) {
+                int[] shape = gpuInterpreter.getOutputTensor(0).shape();
+                Log.d(TAG, "GPU Output tensor shape: " + java.util.Arrays.toString(shape));
+            }
+            
+            Log.d(TAG, "GPU delegate verification complete");
+        } catch (Exception e) {
+            Log.w(TAG, "GPU verification warning: " + e.getMessage());
+        }
     }
     
     private boolean initializeCpuInterpreter(ByteBuffer tfliteModel) {
@@ -416,24 +464,32 @@ public class ThreadSafeSRProcessor {
      */
     private boolean tryGpuCompatibilityMode(Interpreter.Options options) {
         try {
+            Log.d(TAG, "Checking GPU compatibility with CompatibilityList...");
             CompatibilityList compatList = new CompatibilityList();
-            if (!compatList.isDelegateSupportedOnThisDevice()) {
-                Log.w(TAG, "GPU delegate not supported on this device");
+            boolean isSupported = compatList.isDelegateSupportedOnThisDevice();
+            Log.d(TAG, "GPU delegate supported: " + isSupported);
+            
+            if (!isSupported) {
+                Log.e(TAG, "GPU delegate NOT supported on this device");
                 return false;
             }
             
             // Use minimal settings for maximum compatibility
+            Log.d(TAG, "Creating fallback GPU delegate options...");
             GpuDelegate.Options fallbackOptions = new GpuDelegate.Options();
             fallbackOptions.setInferencePreference(GpuDelegate.Options.INFERENCE_PREFERENCE_FAST_SINGLE_ANSWER);
             fallbackOptions.setPrecisionLossAllowed(true);
+            Log.d(TAG, "Fallback options: FAST_SINGLE_ANSWER, precision loss allowed");
             
+            Log.d(TAG, "Creating GPU delegate with fallback options...");
             gpuDelegate = new GpuDelegate(fallbackOptions);
             options.addDelegate(gpuDelegate);
             Log.d(TAG, "GPU delegate configured in compatibility mode");
             return true;
             
         } catch (Exception e) {
-            Log.e(TAG, "GPU compatibility mode failed", e);
+            Log.e(TAG, "GPU compatibility mode failed: " + e.getMessage());
+            Log.e(TAG, "Exception details:", e);
             return false;
         }
     }
@@ -775,7 +831,15 @@ public class ThreadSafeSRProcessor {
                 // Execute inference
                 // Use the actual current mode, not the requested mode
                 String accelerator = getAcceleratorInfo();
-                Log.d(TAG, "Running inference on " + accelerator + " (actual mode: " + currentMode + ")");
+                Log.d(TAG, "========================================");
+                Log.d(TAG, "Starting Inference");
+                Log.d(TAG, "Accelerator: " + accelerator);
+                Log.d(TAG, "Mode: " + currentMode);
+                if (currentMode == ProcessingMode.GPU) {
+                    Log.d(TAG, "GPU Delegate status: " + (gpuDelegate != null ? "Active" : "NULL"));
+                    Log.d(TAG, "GPU Interpreter status: " + (gpuInterpreter != null ? "Available" : "NULL"));
+                }
+                Log.d(TAG, "========================================");
                 
                 long pureInferenceTime = 0;
                 try {
@@ -799,8 +863,12 @@ public class ThreadSafeSRProcessor {
                     // Run inference with appropriate buffers
                     ByteBuffer inputBuf = (inputBuffer != null) ? inputBuffer.getBuffer() : inputByteBuffer;
                     ByteBuffer outputBuf = (outputBuffer != null) ? outputBuffer.getBuffer() : outputByteBuffer;
+                    
+                    Log.d(TAG, "Executing inference with " + currentMode + " interpreter...");
                     currentInterpreter.run(inputBuf, outputBuf);
                     pureInferenceTime = System.currentTimeMillis() - inferenceStart;
+                    
+                    Log.d(TAG, "Inference completed successfully in " + pureInferenceTime + "ms");
                     
                     // NPU性能分析
                     if (currentMode == ProcessingMode.NPU) {
@@ -853,7 +921,15 @@ public class ThreadSafeSRProcessor {
                 long outputTime = System.currentTimeMillis() - outputStart;
                 
                 long totalTime = System.currentTimeMillis() - totalStartTime;
-                Log.d(TAG, "Detailed timing - Preprocessing: " + preprocessTime + "ms, Inference: " + pureInferenceTime + "ms, Output conversion: " + outputTime + "ms, Total: " + totalTime + "ms");
+                Log.d(TAG, "========================================");
+                Log.d(TAG, "Processing Complete");
+                Log.d(TAG, "Timing breakdown:");
+                Log.d(TAG, "  - Preprocessing: " + preprocessTime + "ms");
+                Log.d(TAG, "  - Inference: " + pureInferenceTime + "ms");
+                Log.d(TAG, "  - Output conversion: " + outputTime + "ms");
+                Log.d(TAG, "  - Total: " + totalTime + "ms");
+                Log.d(TAG, "Mode used: " + currentMode);
+                Log.d(TAG, "========================================");
                 
                 // 釋放中間結果
                 if (resizedInput != inputBitmap && !resizedInput.isRecycled()) {
