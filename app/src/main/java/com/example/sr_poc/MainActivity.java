@@ -56,6 +56,7 @@ public class MainActivity extends AppCompatActivity implements ComponentCallback
     private HybridSRProcessor hybridProcessor;  // New hybrid processor
     private ConfigManager configManager;
     private BitmapPoolManager bitmapPoolManager;  // Bitmap pool manager
+    private NativeBridge nativeBridge;  // JNI bridge for native processing
     private Bitmap originalBitmap;
     private Bitmap processedBitmap;
     private boolean useHybridInit = false;  // Flag to use hybrid initialization (DISABLED due to memory issues)
@@ -106,6 +107,17 @@ public class MainActivity extends AppCompatActivity implements ComponentCallback
         // Initialize bitmap pool manager early
         bitmapPoolManager = BitmapPoolManager.getInstance(this);
         Log.d("MainActivity", "BitmapPoolManager initialized");
+        
+        // Initialize native bridge for JNI processing
+        nativeBridge = new NativeBridge();
+        if (nativeBridge.isAvailable()) {
+            Log.d("MainActivity", "Native library loaded: " + nativeBridge.getVersion());
+            // Test native functionality
+            boolean bufferTest = nativeBridge.testDirectBuffer();
+            Log.d("MainActivity", "Native DirectBuffer test: " + (bufferTest ? "PASSED" : "FAILED"));
+        } else {
+            Log.w("MainActivity", "Native library not available");
+        }
         
         // Setup model selection
         setupModelSelection();
@@ -285,6 +297,12 @@ public class MainActivity extends AppCompatActivity implements ComponentCallback
             }
         });
         
+        // Long click to run native benchmark
+        tvInferenceTime.setOnLongClickListener(v -> {
+            runNativeBenchmark();
+            return true;
+        });
+        
         // 長按checkbox顯示配置摘要
         cbEnableTiling.setOnLongClickListener(v -> {
             String configSummary = configManager.getConfigSummary();
@@ -456,6 +474,69 @@ public class MainActivity extends AppCompatActivity implements ComponentCallback
         }
     }
     
+    private void runNativeBenchmark() {
+        if (nativeBridge == null || !nativeBridge.isAvailable()) {
+            Toast.makeText(this, "Native library not available", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        
+        // Show progress dialog
+        AlertDialog progressDialog = new AlertDialog.Builder(this)
+            .setTitle("Native Benchmark")
+            .setMessage("Running native performance test...")
+            .setCancelable(false)
+            .create();
+        progressDialog.show();
+        
+        // Run benchmark in background
+        new Thread(() -> {
+            try {
+                // Run benchmark with 100 iterations
+                long benchmarkTime = nativeBridge.benchmark(100);
+                
+                // Test DirectBuffer access
+                boolean bufferTest = nativeBridge.testDirectBuffer();
+                
+                // Get version info
+                String version = nativeBridge.getVersion();
+                
+                // Prepare results
+                String results = String.format(
+                    "Native Library Test Results:\n\n" +
+                    "Version: %s\n" +
+                    "Benchmark (100 iterations): %d ms\n" +
+                    "DirectBuffer Test: %s\n" +
+                    "Library Status: %s",
+                    version,
+                    benchmarkTime,
+                    bufferTest ? "PASSED" : "FAILED",
+                    nativeBridge.isInitialized() ? "Initialized" : "Not initialized"
+                );
+                
+                // Show results on UI thread
+                runOnUiThread(() -> {
+                    progressDialog.dismiss();
+                    
+                    new AlertDialog.Builder(this)
+                        .setTitle("Native Test Results")
+                        .setMessage(results)
+                        .setPositiveButton("OK", null)
+                        .show();
+                    
+                    Log.d("MainActivity", results);
+                });
+                
+            } catch (Exception e) {
+                Log.e("MainActivity", "Native benchmark failed", e);
+                runOnUiThread(() -> {
+                    progressDialog.dismiss();
+                    Toast.makeText(this, "Benchmark failed: " + e.getMessage(), 
+                                 Toast.LENGTH_LONG).show();
+                });
+            }
+        }).start();
+    }
+    
     private void loadCurrentImage() {
         Bitmap bitmap = imageManager.getCurrentBitmap();
         if (bitmap != null) {
@@ -539,6 +620,12 @@ public class MainActivity extends AppCompatActivity implements ComponentCallback
         if (srProcessor != null) {
             srProcessor.close();
             srProcessor = null;
+        }
+        
+        // Clean up native bridge
+        if (nativeBridge != null) {
+            nativeBridge.release();
+            Log.d("MainActivity", "Native bridge released");
         }
         
         // Clean up bitmap pool manager
