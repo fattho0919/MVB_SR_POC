@@ -23,8 +23,11 @@ import java.util.concurrent.Executors;
 
 import com.example.sr_poc.utils.BitmapConverter;
 import com.example.sr_poc.utils.Constants;
+import com.example.sr_poc.utils.DirectMemoryUtils;
 import com.example.sr_poc.utils.MemoryUtils;
 import com.example.sr_poc.HardwareValidator;
+import com.example.sr_poc.pool.BufferPoolManager;
+import com.example.sr_poc.pool.PooledBitmapFactory;
 
 public class ThreadSafeSRProcessor {
     
@@ -38,6 +41,12 @@ public class ThreadSafeSRProcessor {
     private MemoryOptimizedManager memoryManager;
     
     private ConfigManager configManager;
+    
+    // Buffer pool manager (Story 1.2)
+    private BufferPoolManager bufferPoolManager;
+    
+    // Pooled bitmap factory (Story 1.3)
+    private PooledBitmapFactory bitmapFactory;
     
     private Context context;
     private HandlerThread srThread;
@@ -91,6 +100,18 @@ public class ThreadSafeSRProcessor {
         // Initialize memory optimization manager
         memoryManager = new MemoryOptimizedManager(context);
         memoryManager.setProcessor(this);
+        
+        // Initialize buffer pool manager (Story 1.2)
+        if (configManager.useBufferPool()) {
+            bufferPoolManager = BufferPoolManager.getInstance(context);
+            Log.d(TAG, "Buffer pool manager initialized");
+        } else {
+            Log.d(TAG, "Buffer pool disabled in configuration");
+        }
+        
+        // Initialize pooled bitmap factory (Story 1.3)
+        bitmapFactory = new PooledBitmapFactory(context);
+        Log.d(TAG, "Pooled bitmap factory initialized");
         
         // Initialize parallel processing executor
         int cores = Runtime.getRuntime().availableProcessors();
@@ -378,6 +399,12 @@ public class ThreadSafeSRProcessor {
             Log.d(TAG, "Reading model dimensions - Input: " + java.util.Arrays.toString(inputShape) + 
                       ", Output: " + java.util.Arrays.toString(outputShape));
             
+            // Store previous dimensions to check if they changed
+            int previousInputWidth = actualInputWidth;
+            int previousInputHeight = actualInputHeight;
+            int previousOutputWidth = actualOutputWidth;
+            int previousOutputHeight = actualOutputHeight;
+            
             // 解析輸入尺寸 (NHWC格式)
             if (inputShape.length >= 3) {
                 actualInputHeight = inputShape[1];
@@ -392,6 +419,17 @@ public class ThreadSafeSRProcessor {
                 actualOutputWidth = outputShape[2];
             } else {
                 throw new RuntimeException("Invalid output shape: " + java.util.Arrays.toString(outputShape));
+            }
+            
+            // Check if dimensions changed and reallocate cached arrays if needed
+            boolean dimensionsChanged = (actualInputWidth != previousInputWidth || 
+                                       actualInputHeight != previousInputHeight ||
+                                       actualOutputWidth != previousOutputWidth || 
+                                       actualOutputHeight != previousOutputHeight);
+            
+            if (dimensionsChanged && (previousInputWidth != 0 || previousInputHeight != 0)) {
+                Log.d(TAG, "Model dimensions changed, reallocating cached arrays");
+                allocateCachedArrays();
             }
             
             // 驗證超解析度倍率是否符合配置
@@ -564,17 +602,38 @@ public class ThreadSafeSRProcessor {
             int inputPixels = actualInputWidth * actualInputHeight;
             int outputPixels = actualOutputWidth * actualOutputHeight;
             
-            // Allocate input processing caches
-            cachedPixelArray = new int[inputPixels];
-            cachedFloatArray = new float[inputPixels * 3];
-            cachedByteArray = new byte[inputPixels * 3];
+            // Check if arrays need reallocation or if they're null
+            boolean needInputReallocation = cachedPixelArray == null || 
+                                          cachedPixelArray.length < inputPixels ||
+                                          cachedFloatArray == null || 
+                                          cachedFloatArray.length < inputPixels * 3;
             
-            // Allocate output processing caches
-            cachedOutputPixelArray = new int[outputPixels];
-            cachedOutputFloatArray = new float[outputPixels * 3];
-            cachedOutputByteArray = new byte[outputPixels * 3];
+            boolean needOutputReallocation = cachedOutputPixelArray == null || 
+                                           cachedOutputPixelArray.length < outputPixels ||
+                                           cachedOutputFloatArray == null || 
+                                           cachedOutputFloatArray.length < outputPixels * 3;
             
-            Log.d(TAG, "Cached arrays allocated - Input: " + inputPixels + ", Output: " + outputPixels + " pixels");
+            if (needInputReallocation) {
+                Log.d(TAG, "Reallocating input cached arrays for size: " + inputPixels + " pixels");
+                // Allocate input processing caches
+                cachedPixelArray = new int[inputPixels];
+                cachedFloatArray = new float[inputPixels * 3];
+                cachedByteArray = new byte[inputPixels * 3];
+            }
+            
+            if (needOutputReallocation) {
+                Log.d(TAG, "Reallocating output cached arrays for size: " + outputPixels + " pixels");
+                // Allocate output processing caches
+                cachedOutputPixelArray = new int[outputPixels];
+                cachedOutputFloatArray = new float[outputPixels * 3];
+                cachedOutputByteArray = new byte[outputPixels * 3];
+            }
+            
+            if (needInputReallocation || needOutputReallocation) {
+                Log.d(TAG, "Cached arrays allocated - Input: " + inputPixels + ", Output: " + outputPixels + " pixels");
+            } else {
+                Log.v(TAG, "Cached arrays already sufficient - Input: " + inputPixels + ", Output: " + outputPixels + " pixels");
+            }
         } catch (OutOfMemoryError e) {
             Log.e(TAG, "Out of memory allocating cached arrays", e);
             throw new RuntimeException("Insufficient memory for cached arrays", e);
@@ -697,31 +756,89 @@ public class ThreadSafeSRProcessor {
         
         if (needNewInputBuffer) {
             Log.d(TAG, "Reallocating input buffer");
-            if (inputDataType == DataType.INT8) {
-                // Use direct ByteBuffer for INT8 since TensorBuffer doesn't support it
-                inputByteBuffer = ByteBuffer.allocateDirect((int) requiredInputBytes);
-                inputByteBuffer.order(java.nio.ByteOrder.nativeOrder());
-                inputBuffer = null; // Clear TensorBuffer
-                Log.d(TAG, "New input ByteBuffer capacity: " + inputByteBuffer.capacity() + " bytes");
+            
+            // Clean up old buffer first - return to pool if using buffer pool
+            if (inputByteBuffer != null) {
+                if (bufferPoolManager != null && configManager.useBufferPool()) {
+                    bufferPoolManager.releasePrimaryBuffer(inputByteBuffer);
+                    Log.v(TAG, "Released old input buffer to pool");
+                } else {
+                    DirectMemoryUtils.cleanDirectBuffer(inputByteBuffer);
+                }
+                inputByteBuffer = null;
+            }
+            if (inputBuffer != null) {
+                inputBuffer = null; // Let GC handle TensorBuffer
+            }
+            
+            if (configManager.useDirectByteBuffer()) {
+                // Use DirectByteBuffer for all data types (Story 1.1 + 1.2 enhancement)
+                if (bufferPoolManager != null && configManager.useBufferPool()) {
+                    // Use buffer pool (Story 1.2)
+                    inputByteBuffer = bufferPoolManager.acquirePrimaryBuffer((int) requiredInputBytes);
+                    Log.d(TAG, "Acquired input buffer from pool: " + inputByteBuffer.capacity() + " bytes");
+                } else {
+                    // Fall back to direct allocation (Story 1.1)
+                    inputByteBuffer = DirectMemoryUtils.allocateAlignedDirectBuffer((int) requiredInputBytes);
+                    Log.d(TAG, "Direct allocated input buffer: " + inputByteBuffer.capacity() + " bytes");
+                }
+                inputBuffer = null;
             } else {
-                inputBuffer = TensorBuffer.createFixedSize(inputShape, inputDataType);
-                inputByteBuffer = null; // Clear direct buffer
-                Log.d(TAG, "New input TensorBuffer capacity: " + inputBuffer.getBuffer().capacity() + " bytes");
+                // Original logic for fallback (heap-based)
+                if (inputDataType == DataType.INT8) {
+                    inputByteBuffer = ByteBuffer.allocateDirect((int) requiredInputBytes);
+                    inputByteBuffer.order(java.nio.ByteOrder.nativeOrder());
+                    inputBuffer = null;
+                    Log.d(TAG, "New input ByteBuffer capacity: " + inputByteBuffer.capacity() + " bytes");
+                } else {
+                    inputBuffer = TensorBuffer.createFixedSize(inputShape, inputDataType);
+                    inputByteBuffer = null;
+                    Log.d(TAG, "New input TensorBuffer capacity: " + inputBuffer.getBuffer().capacity() + " bytes");
+                }
             }
         }
         
         if (needNewOutputBuffer) {
             Log.d(TAG, "Reallocating output buffer");
-            if (outputDataType == DataType.INT8) {
-                // Use direct ByteBuffer for INT8 since TensorBuffer doesn't support it
-                outputByteBuffer = ByteBuffer.allocateDirect((int) requiredOutputBytes);
-                outputByteBuffer.order(java.nio.ByteOrder.nativeOrder());
-                outputBuffer = null; // Clear TensorBuffer
-                Log.d(TAG, "New output ByteBuffer capacity: " + outputByteBuffer.capacity() + " bytes");
+            
+            // Clean up old buffer first - return to pool if using buffer pool
+            if (outputByteBuffer != null) {
+                if (bufferPoolManager != null && configManager.useBufferPool()) {
+                    bufferPoolManager.releasePrimaryBuffer(outputByteBuffer);
+                    Log.v(TAG, "Released old output buffer to pool");
+                } else {
+                    DirectMemoryUtils.cleanDirectBuffer(outputByteBuffer);
+                }
+                outputByteBuffer = null;
+            }
+            if (outputBuffer != null) {
+                outputBuffer = null; // Let GC handle TensorBuffer
+            }
+            
+            if (configManager.useDirectByteBuffer()) {
+                // Use DirectByteBuffer for all data types (Story 1.1 + 1.2 enhancement)
+                if (bufferPoolManager != null && configManager.useBufferPool()) {
+                    // Use buffer pool (Story 1.2)
+                    outputByteBuffer = bufferPoolManager.acquirePrimaryBuffer((int) requiredOutputBytes);
+                    Log.d(TAG, "Acquired output buffer from pool: " + outputByteBuffer.capacity() + " bytes");
+                } else {
+                    // Fall back to direct allocation (Story 1.1)
+                    outputByteBuffer = DirectMemoryUtils.allocateAlignedDirectBuffer((int) requiredOutputBytes);
+                    Log.d(TAG, "Direct allocated output buffer: " + outputByteBuffer.capacity() + " bytes");
+                }
+                outputBuffer = null;
             } else {
-                outputBuffer = TensorBuffer.createFixedSize(outputShape, outputDataType);
-                outputByteBuffer = null; // Clear direct buffer
-                Log.d(TAG, "New output TensorBuffer capacity: " + outputBuffer.getBuffer().capacity() + " bytes");
+                // Original logic for fallback (heap-based)
+                if (outputDataType == DataType.INT8) {
+                    outputByteBuffer = ByteBuffer.allocateDirect((int) requiredOutputBytes);
+                    outputByteBuffer.order(java.nio.ByteOrder.nativeOrder());
+                    outputBuffer = null;
+                    Log.d(TAG, "New output ByteBuffer capacity: " + outputByteBuffer.capacity() + " bytes");
+                } else {
+                    outputBuffer = TensorBuffer.createFixedSize(outputShape, outputDataType);
+                    outputByteBuffer = null;
+                    Log.d(TAG, "New output TensorBuffer capacity: " + outputBuffer.getBuffer().capacity() + " bytes");
+                }
             }
         }
         
@@ -994,8 +1111,16 @@ public class ThreadSafeSRProcessor {
         // Use utility class for conversion
         BitmapConverter.convertPixelsToFloat32(pixels, cachedFloatArray);
         
-        // Write to buffer
-        inputBuffer.getBuffer().asFloatBuffer().put(cachedFloatArray, 0, totalFloats);
+        // Write to buffer (support both TensorBuffer and DirectByteBuffer)
+        if (inputBuffer != null) {
+            // Original TensorBuffer path
+            inputBuffer.getBuffer().asFloatBuffer().put(cachedFloatArray, 0, totalFloats);
+        } else if (inputByteBuffer != null) {
+            // DirectByteBuffer path (Story 1.1 enhancement)
+            inputByteBuffer.asFloatBuffer().put(cachedFloatArray, 0, totalFloats);
+        } else {
+            throw new IllegalStateException("No input buffer available");
+        }
     }
     
     private void convertPixelsToUint8Buffer(int[] pixels) {
@@ -1008,8 +1133,16 @@ public class ThreadSafeSRProcessor {
         // Use utility class for conversion
         BitmapConverter.convertPixelsToUint8(pixels, cachedByteArray);
         
-        // Write to buffer
-        inputBuffer.getBuffer().put(cachedByteArray, 0, totalBytes);
+        // Write to buffer (support both TensorBuffer and DirectByteBuffer)
+        if (inputBuffer != null) {
+            // Original TensorBuffer path
+            inputBuffer.getBuffer().put(cachedByteArray, 0, totalBytes);
+        } else if (inputByteBuffer != null) {
+            // DirectByteBuffer path (Story 1.1 enhancement)
+            inputByteBuffer.put(cachedByteArray, 0, totalBytes);
+        } else {
+            throw new IllegalStateException("No input buffer available");
+        }
     }
     
     private void convertPixelsToInt8Buffer(int[] pixels) {
@@ -1080,11 +1213,13 @@ public class ThreadSafeSRProcessor {
             return null;
         }
         
-        // 只複製需要的像素數據到新數組給Bitmap.createBitmap
-        int[] bitmapPixels = new int[totalPixels];
-        System.arraycopy(cachedOutputPixelArray, 0, bitmapPixels, 0, totalPixels);
+        // Use pooled bitmap factory for memory efficiency (Story 1.3)
+        Bitmap outputBitmap = bitmapFactory.createBitmap(outputWidth, outputHeight, Bitmap.Config.ARGB_8888);
         
-        return Bitmap.createBitmap(bitmapPixels, outputWidth, outputHeight, Bitmap.Config.ARGB_8888);
+        // Copy pixel data to the pooled bitmap
+        outputBitmap.setPixels(cachedOutputPixelArray, 0, outputWidth, 0, 0, outputWidth, outputHeight);
+        
+        return outputBitmap;
     }
     
     private void convertFloat32OutputToPixelsCached(int[] pixels, int totalPixels) {
@@ -1094,8 +1229,16 @@ public class ThreadSafeSRProcessor {
             cachedOutputFloatArray = new float[totalFloats];
         }
         
-        // Read all float data to cached array
-        outputBuffer.getBuffer().asFloatBuffer().get(cachedOutputFloatArray, 0, totalFloats);
+        // Read all float data to cached array (support both TensorBuffer and DirectByteBuffer)
+        if (outputBuffer != null) {
+            // Original TensorBuffer path
+            outputBuffer.getBuffer().asFloatBuffer().get(cachedOutputFloatArray, 0, totalFloats);
+        } else if (outputByteBuffer != null) {
+            // DirectByteBuffer path (Story 1.1 enhancement)
+            outputByteBuffer.asFloatBuffer().get(cachedOutputFloatArray, 0, totalFloats);
+        } else {
+            throw new IllegalStateException("No output buffer available");
+        }
         
         // Debug original float values
         debugFloat32Values(cachedOutputFloatArray, totalFloats);
@@ -1117,8 +1260,16 @@ public class ThreadSafeSRProcessor {
             cachedOutputByteArray = new byte[totalBytes];
         }
         
-        // Read all byte data to cached array
-        outputBuffer.getBuffer().get(cachedOutputByteArray, 0, totalBytes);
+        // Read all byte data to cached array (support both TensorBuffer and DirectByteBuffer)
+        if (outputBuffer != null) {
+            // Original TensorBuffer path
+            outputBuffer.getBuffer().get(cachedOutputByteArray, 0, totalBytes);
+        } else if (outputByteBuffer != null) {
+            // DirectByteBuffer path (Story 1.1 enhancement)
+            outputByteBuffer.get(cachedOutputByteArray, 0, totalBytes);
+        } else {
+            throw new IllegalStateException("No output buffer available");
+        }
         
         // Use utility class for conversion with parallel processing support
         if (totalPixels > Constants.LARGE_IMAGE_PIXEL_THRESHOLD) {
@@ -1372,6 +1523,31 @@ public class ThreadSafeSRProcessor {
                     npuDelegate.close();
                     npuDelegate = null;
                 }
+                
+                // Clean up DirectByteBuffers (Story 1.1 + 1.2 enhancement)
+                if (inputByteBuffer != null) {
+                    if (bufferPoolManager != null && configManager.useBufferPool()) {
+                        bufferPoolManager.releasePrimaryBuffer(inputByteBuffer);
+                        Log.d(TAG, "Released input buffer to pool on close");
+                    } else {
+                        DirectMemoryUtils.cleanDirectBuffer(inputByteBuffer);
+                    }
+                    inputByteBuffer = null;
+                }
+                if (outputByteBuffer != null) {
+                    if (bufferPoolManager != null && configManager.useBufferPool()) {
+                        bufferPoolManager.releasePrimaryBuffer(outputByteBuffer);
+                        Log.d(TAG, "Released output buffer to pool on close");
+                    } else {
+                        DirectMemoryUtils.cleanDirectBuffer(outputByteBuffer);
+                    }
+                    outputByteBuffer = null;
+                }
+                
+                // Clean up TensorBuffers
+                inputBuffer = null;
+                outputBuffer = null;
+                
                 currentInterpreter = null;
                 Log.d(TAG, "All resources released");
             });
