@@ -25,6 +25,7 @@ import android.graphics.Color;
 import androidx.appcompat.app.AlertDialog;
 
 import com.example.sr_poc.R;
+import com.example.sr_poc.pool.BitmapPoolManager;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -54,6 +55,7 @@ public class MainActivity extends AppCompatActivity implements ComponentCallback
     private ThreadSafeSRProcessor srProcessor;
     private HybridSRProcessor hybridProcessor;  // New hybrid processor
     private ConfigManager configManager;
+    private BitmapPoolManager bitmapPoolManager;  // Bitmap pool manager
     private Bitmap originalBitmap;
     private Bitmap processedBitmap;
     private boolean useHybridInit = false;  // Flag to use hybrid initialization (DISABLED due to memory issues)
@@ -100,6 +102,10 @@ public class MainActivity extends AppCompatActivity implements ComponentCallback
         // 初始化配置管理器
         configManager = ConfigManager.getInstance(this);
         Log.d("MainActivity", "Configuration loaded: " + configManager.getConfigSummary());
+        
+        // Initialize bitmap pool manager early
+        bitmapPoolManager = BitmapPoolManager.getInstance(this);
+        Log.d("MainActivity", "BitmapPoolManager initialized");
         
         // Setup model selection
         setupModelSelection();
@@ -533,6 +539,12 @@ public class MainActivity extends AppCompatActivity implements ComponentCallback
         if (srProcessor != null) {
             srProcessor.close();
             srProcessor = null;
+        }
+        
+        // Clean up bitmap pool manager
+        if (bitmapPoolManager != null) {
+            bitmapPoolManager.clearPool();
+            // Note: Don't shutdown as it's a singleton that might be used elsewhere
         }
         
         // Clean up bitmaps

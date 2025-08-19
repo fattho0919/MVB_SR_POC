@@ -2,6 +2,12 @@ package com.example.sr_poc;
 
 import android.graphics.Bitmap;
 import android.util.Log;
+import android.content.Context;
+import com.example.sr_poc.pool.PooledBitmapFactory;
+import com.example.sr_poc.pool.LargeBitmapProcessor;
+
+import java.util.ArrayList;
+import java.util.List;
 
 public class TileProcessor {
     
@@ -9,6 +15,8 @@ public class TileProcessor {
     
     private ThreadSafeSRProcessor srProcessor;
     private ConfigManager configManager;
+    private PooledBitmapFactory bitmapFactory;
+    private LargeBitmapProcessor largeBitmapProcessor;
     private int tileSize; // 動態設定的tile尺寸
     private int outputScale; // 動態計算的輸出倍率
     private int overlapPixels; // 來自配置的overlap像素數
@@ -18,6 +26,20 @@ public class TileProcessor {
     
     public TileProcessor(ThreadSafeSRProcessor processor) {
         this.srProcessor = processor;
+        
+        // Initialize pooled bitmap factory and large bitmap processor
+        if (processor != null) {
+            try {
+                // Get context from processor via reflection
+                java.lang.reflect.Field contextField = processor.getClass().getDeclaredField("context");
+                contextField.setAccessible(true);
+                Context context = (Context) contextField.get(processor);
+                this.bitmapFactory = new PooledBitmapFactory(context);
+                this.largeBitmapProcessor = new LargeBitmapProcessor(context);
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to initialize bitmap processors", e);
+            }
+        }
         
         // 使用預設overlap值（向後兼容）
         this.overlapPixels = 32;
@@ -42,6 +64,21 @@ public class TileProcessor {
         this.srProcessor = processor;
         this.configManager = configManager;
         
+        // Initialize pooled bitmap factory and large bitmap processor
+        if (processor != null) {
+            try {
+                java.lang.reflect.Field contextField = processor.getClass().getDeclaredField("context");
+                contextField.setAccessible(true);
+                Context context = (Context) contextField.get(processor);
+                this.bitmapFactory = new PooledBitmapFactory(context);
+                this.largeBitmapProcessor = new LargeBitmapProcessor(context);
+                // Configure overlap from config
+                this.largeBitmapProcessor.setTileOverlap(this.overlapPixels);
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to initialize bitmap processors", e);
+            }
+        }
+        
         // 從配置獲取overlap像素數
         this.overlapPixels = configManager.getOverlapPixels();
         
@@ -65,6 +102,10 @@ public class TileProcessor {
      * 將大圖片分塊處理以避免記憶體溢出
      */
     public Bitmap processByTiles(Bitmap inputBitmap, ProcessCallback callback) {
+        return processByTiles(inputBitmap, ThreadSafeSRProcessor.ProcessingMode.CPU, callback);
+    }
+    
+    public Bitmap processByTiles(Bitmap inputBitmap, ThreadSafeSRProcessor.ProcessingMode mode, ProcessCallback callback) {
         if (inputBitmap == null) {
             Log.e(TAG, "Input bitmap is null");
             return null;
@@ -94,7 +135,10 @@ public class TileProcessor {
         
         Log.d(TAG, "Calculated output size: " + outputWidth + "x" + outputHeight);
         
-        Bitmap resultBitmap = Bitmap.createBitmap(outputWidth, outputHeight, Bitmap.Config.ARGB_8888);
+        // Use pooled bitmap factory for result bitmap (Story 1.3)
+        Bitmap resultBitmap = (bitmapFactory != null) ? 
+                bitmapFactory.createBitmap(outputWidth, outputHeight, Bitmap.Config.ARGB_8888) :
+                Bitmap.createBitmap(outputWidth, outputHeight, Bitmap.Config.ARGB_8888);
         android.graphics.Canvas canvas = new android.graphics.Canvas(resultBitmap);
         
         int processedTiles = 0;
@@ -124,12 +168,17 @@ public class TileProcessor {
                 // 提取分塊，確保符合模型輸入尺寸
                 Bitmap tileBitmap;
                 if (tileWidth == tileSize && tileHeight == tileSize) {
+                    // Use direct crop from source bitmap
                     tileBitmap = Bitmap.createBitmap(inputBitmap, tileLeft, tileTop, tileWidth, tileHeight);
                 } else {
                     // 對於邊界tile，需要padding到模型輸入尺寸
-                    tileBitmap = Bitmap.createBitmap(tileSize, tileSize, Bitmap.Config.ARGB_8888);
+                    // Use pooled bitmap factory for tile bitmap (Story 1.3)
+                    tileBitmap = (bitmapFactory != null) ?
+                            bitmapFactory.createBitmap(tileSize, tileSize, Bitmap.Config.ARGB_8888) :
+                            Bitmap.createBitmap(tileSize, tileSize, Bitmap.Config.ARGB_8888);
                     android.graphics.Canvas tileCanvas = new android.graphics.Canvas(tileBitmap);
                     
+                    // Create source tile (direct crop)
                     Bitmap sourceTile = Bitmap.createBitmap(inputBitmap, tileLeft, tileTop, tileWidth, tileHeight);
                     tileCanvas.drawBitmap(sourceTile, 0, 0, null);
                     
@@ -151,6 +200,7 @@ public class TileProcessor {
                         }
                     }
                     
+                    // Recycle source tile (not pooled)
                     sourceTile.recycle();
                 }
                 
@@ -247,18 +297,32 @@ public class TileProcessor {
                         if (cropLeft + actualCropWidth <= processedTile.getWidth() && 
                             cropTop + actualCropHeight <= processedTile.getHeight()) {
                             
-                            Bitmap croppedTile = Bitmap.createBitmap(processedTile, 
-                                cropLeft, cropTop, actualCropWidth, actualCropHeight);
+                            // Use pooled bitmap factory for cropped tile (Story 1.3)
+                            Bitmap croppedTile = (bitmapFactory != null) ?
+                                    bitmapFactory.createCroppedBitmap(processedTile, cropLeft, cropTop, actualCropWidth, actualCropHeight) :
+                                    Bitmap.createBitmap(processedTile, cropLeft, cropTop, actualCropWidth, actualCropHeight);
                             canvas.drawBitmap(croppedTile, outputLeft, outputTop, null);
-                            croppedTile.recycle();
+                            // Release cropped tile back to pool if pooled
+                            if (bitmapFactory != null) {
+                                bitmapFactory.releaseBitmap(croppedTile);
+                            } else {
+                                croppedTile.recycle();
+                            }
                         }
                     }
                     
+                    // Recycle processed tile (comes from SR processor)
                     processedTile.recycle();
                     processedTiles++;
                 }
                 
-                tileBitmap.recycle();
+                // Release tile bitmap back to pool if pooled
+                if (bitmapFactory != null && tileWidth != tileSize) {
+                    // Only pooled bitmaps (padded tiles) go back to pool
+                    bitmapFactory.releaseBitmap(tileBitmap);
+                } else {
+                    tileBitmap.recycle();
+                }
                 
                 long tileTime = System.currentTimeMillis() - tileStartTime;
                 totalTileTime += tileTime;
@@ -359,5 +423,172 @@ public class TileProcessor {
                    "Force above: " + forceTilingAboveMb + "MB, " +
                    "Should use tile processing: " + useTiling);
         return useTiling;
+    }
+    
+    /**
+     * Process a large image using optimized tiling with LargeBitmapProcessor.
+     * This method is specifically designed for handling 4K+ images.
+     * 
+     * @param inputBitmap Input bitmap to process
+     * @param mode Processing mode (GPU/CPU/NPU)
+     * @param callback Progress callback
+     * @return Processed output bitmap
+     */
+    public Bitmap processLargeImage(Bitmap inputBitmap, 
+                                   ThreadSafeSRProcessor.ProcessingMode mode,
+                                   ProcessCallback callback) {
+        if (largeBitmapProcessor == null) {
+            Log.w(TAG, "LargeBitmapProcessor not initialized, falling back to standard processing");
+            return processByTiles(inputBitmap, mode, callback);
+        }
+        
+        int inputWidth = inputBitmap.getWidth();
+        int inputHeight = inputBitmap.getHeight();
+        
+        Log.d(TAG, String.format("Processing large image: %dx%d using LargeBitmapProcessor", 
+                                inputWidth, inputHeight));
+        
+        // Check if image exceeds GPU texture limits
+        boolean needsSpecialHandling = largeBitmapProcessor.needsTiling(inputWidth, inputHeight);
+        
+        if (!needsSpecialHandling) {
+            // Image fits within texture limits, use standard tiling
+            return processByTiles(inputBitmap, mode, callback);
+        }
+        
+        // Calculate optimal tile size based on memory and GPU constraints
+        int optimalTileSize = largeBitmapProcessor.calculateOptimalTileSize(
+            inputWidth, inputHeight, tileSize);
+        
+        // Get tile layout
+        List<LargeBitmapProcessor.TileInfo> tileInfos = 
+            largeBitmapProcessor.calculateTileLayout(inputWidth, inputHeight, 
+                                                    optimalTileSize, outputScale);
+        
+        // Process each tile
+        List<Bitmap> processedTiles = new ArrayList<>();
+        int totalTiles = tileInfos.size();
+        int processedCount = 0;
+        
+        Log.d(TAG, String.format("Processing %d tiles with size %d", totalTiles, optimalTileSize));
+        
+        for (LargeBitmapProcessor.TileInfo tileInfo : tileInfos) {
+            try {
+                // Extract tile
+                Bitmap tile = largeBitmapProcessor.extractTile(inputBitmap, tileInfo, optimalTileSize);
+                
+                // Process tile using SR processor with synchronous wrapper
+                final Bitmap[] processedTileHolder = new Bitmap[1];
+                final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+                
+                srProcessor.processImageWithMode(tile, mode, new ThreadSafeSRProcessor.InferenceCallback() {
+                    @Override
+                    public void onResult(Bitmap result, long inferenceTime) {
+                        processedTileHolder[0] = result;
+                        latch.countDown();
+                    }
+                    
+                    @Override
+                    public void onError(String error) {
+                        Log.e(TAG, "Error processing tile: " + error);
+                        latch.countDown();
+                    }
+                });
+                
+                try {
+                    latch.await();
+                } catch (InterruptedException e) {
+                    Log.e(TAG, "Interrupted while waiting for tile processing", e);
+                }
+                
+                Bitmap processedTile = processedTileHolder[0];
+                
+                if (processedTile != null) {
+                    processedTiles.add(processedTile);
+                } else {
+                    // Create empty tile if processing failed
+                    Bitmap emptyTile = bitmapFactory.createBitmap(
+                        optimalTileSize * outputScale, 
+                        optimalTileSize * outputScale, 
+                        Bitmap.Config.ARGB_8888);
+                    processedTiles.add(emptyTile);
+                }
+                
+                // Release input tile
+                bitmapFactory.releaseBitmap(tile);
+                
+                processedCount++;
+                
+                // Report progress
+                if (callback != null) {
+                    callback.onProgress(processedCount, totalTiles);
+                }
+                
+            } catch (OutOfMemoryError e) {
+                Log.e(TAG, "OOM processing tile, attempting quality reduction", e);
+                
+                // Try to recover by reducing quality
+                System.gc();
+                
+                // Release already processed tiles to free memory
+                for (Bitmap processed : processedTiles) {
+                    if (processed != null) {
+                        bitmapFactory.releaseBitmap(processed);
+                    }
+                }
+                processedTiles.clear();
+                
+                // Reduce input quality and retry
+                Bitmap reducedInput = largeBitmapProcessor.reduceQualityForMemory(inputBitmap, 100);
+                return processByTiles(reducedInput, mode, callback);
+            }
+        }
+        
+        // Calculate output dimensions
+        int outputWidth = inputWidth * outputScale;
+        int outputHeight = inputHeight * outputScale;
+        
+        // Merge tiles into final output
+        Bitmap result = largeBitmapProcessor.mergeTiles(processedTiles, tileInfos, 
+                                                       outputWidth, outputHeight, outputScale);
+        
+        // Release processed tiles
+        largeBitmapProcessor.releaseTiles(processedTiles);
+        
+        // Store tile count for reporting
+        lastTileCount = totalTiles;
+        
+        Log.d(TAG, String.format("Large image processing complete: %dx%d -> %dx%d using %d tiles",
+                               inputWidth, inputHeight, outputWidth, outputHeight, totalTiles));
+        
+        return result;
+    }
+    
+    /**
+     * Checks if the current device can handle a given image size.
+     * 
+     * @param width Image width
+     * @param height Image height
+     * @return true if the image can be processed
+     */
+    public boolean canProcessImageSize(int width, int height) {
+        if (largeBitmapProcessor == null) {
+            // Conservative estimate without LargeBitmapProcessor
+            return width <= 4096 && height <= 4096;
+        }
+        
+        int maxTextureSize = largeBitmapProcessor.getMaxTextureSize();
+        
+        // Check if we can process with tiling
+        if (width > maxTextureSize || height > maxTextureSize) {
+            // Calculate required tiles
+            int tilesNeeded = ((width + maxTextureSize - 1) / maxTextureSize) * 
+                            ((height + maxTextureSize - 1) / maxTextureSize);
+            
+            // Limit to reasonable tile count
+            return tilesNeeded <= 64;
+        }
+        
+        return true;
     }
 }
