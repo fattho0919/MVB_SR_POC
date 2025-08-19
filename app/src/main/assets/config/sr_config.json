@@ -48,5 +48,25 @@
     "log_model_shapes": true,
     "log_performance_stats": true,
     "enable_buffer_validation": false
+  },
+  "direct_byte_buffer": {
+    "use_direct_byte_buffer": true,
+    "direct_memory_size_mb": 512
+  },
+  "buffer_pool": {
+    "use_buffer_pool": true,
+    "max_pool_size_mb": 512,
+    "primary_pool_size_mb": 256,
+    "tile_pool_size_mb": 128,
+    "preallocation_enabled": true,
+    "max_buffers_per_size": 4,
+    "enable_pool_metrics": true
+  },
+  "bitmap_pool": {
+    "enabled": true,
+    "max_pool_size_mb": 64,
+    "max_bitmaps_per_size": 3,
+    "prealloc_sizes": ["1280x720", "1920x1080", "512x512"],
+    "trim_on_memory_pressure": true
   }
 }

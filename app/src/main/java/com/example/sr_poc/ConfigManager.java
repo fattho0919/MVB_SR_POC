@@ -47,6 +47,8 @@ public class ConfigManager {
     private int lowMemoryWarningMb;
     private boolean gcAfterInference;
     private boolean enableMemoryLogging;
+    private boolean useDirectByteBuffer;
+    private int directMemorySizeMb;
     private boolean defaultTilingEnabled;
     private boolean showDetailedTiming;
     private boolean showMemoryStats;
@@ -68,6 +70,20 @@ public class ConfigManager {
     private boolean allowFp16OnNpu;
     private String npuAcceleratorName;
     private boolean useNpuForQuantized;
+    
+    // Buffer pool configuration (Story 1.2)
+    private boolean useBufferPool;
+    private int maxPoolSizeMb;
+    private int primaryPoolSizeMb;
+    private int tilePoolSizeMb;
+    private boolean preallocationEnabled;
+    private int maxBuffersPerSize;
+    private boolean enablePoolMetrics;
+    
+    // Bitmap pool configuration (Story 1.3)
+    private boolean useBitmapPool;
+    private int bitmapPoolMaxSizeMb;
+    private int maxBitmapsPerSize;
     
     private ConfigManager(Context context) {
         this.context = context.getApplicationContext();
@@ -226,6 +242,42 @@ public class ConfigManager {
         lowMemoryWarningMb = memoryConfig.getInt("low_memory_warning_mb");
         gcAfterInference = memoryConfig.getBoolean("gc_after_inference");
         enableMemoryLogging = memoryConfig.getBoolean("enable_memory_logging");
+        useDirectByteBuffer = memoryConfig.optBoolean("use_direct_byte_buffer", false);
+        directMemorySizeMb = memoryConfig.optInt("direct_memory_size_mb", 512);
+        
+        // Buffer pool configuration (Story 1.2)
+        JSONObject bufferPoolConfig = config.optJSONObject("buffer_pool");
+        if (bufferPoolConfig != null) {
+            useBufferPool = bufferPoolConfig.optBoolean("use_buffer_pool", false);
+            maxPoolSizeMb = bufferPoolConfig.optInt("max_pool_size_mb", 512);
+            primaryPoolSizeMb = bufferPoolConfig.optInt("primary_pool_size_mb", 256);
+            tilePoolSizeMb = bufferPoolConfig.optInt("tile_pool_size_mb", 128);
+            preallocationEnabled = bufferPoolConfig.optBoolean("preallocation_enabled", true);
+            maxBuffersPerSize = bufferPoolConfig.optInt("max_buffers_per_size", 4);
+            enablePoolMetrics = bufferPoolConfig.optBoolean("enable_pool_metrics", true);
+        } else {
+            // Default buffer pool values if config section doesn't exist
+            useBufferPool = false;
+            maxPoolSizeMb = 512;
+            primaryPoolSizeMb = 256;
+            tilePoolSizeMb = 128;
+            preallocationEnabled = true;
+            maxBuffersPerSize = 4;
+            enablePoolMetrics = true;
+        }
+        
+        // Bitmap pool configuration (Story 1.3)
+        JSONObject bitmapPoolConfig = config.optJSONObject("bitmap_pool");
+        if (bitmapPoolConfig != null) {
+            useBitmapPool = bitmapPoolConfig.optBoolean("enabled", false);
+            bitmapPoolMaxSizeMb = bitmapPoolConfig.optInt("max_pool_size_mb", 64);
+            maxBitmapsPerSize = bitmapPoolConfig.optInt("max_bitmaps_per_size", 3);
+        } else {
+            // Default bitmap pool values if config section doesn't exist
+            useBitmapPool = false;
+            bitmapPoolMaxSizeMb = 64;
+            maxBitmapsPerSize = 3;
+        }
         
         // UI configuration
         JSONObject uiConfig = config.getJSONObject("ui");
@@ -258,6 +310,23 @@ public class ConfigManager {
         lowMemoryWarningMb = 100;
         gcAfterInference = false;
         enableMemoryLogging = true;
+        useDirectByteBuffer = false;
+        directMemorySizeMb = 512;
+        
+        // Buffer pool defaults (Story 1.2)
+        useBufferPool = false;
+        maxPoolSizeMb = 512;
+        primaryPoolSizeMb = 256;
+        tilePoolSizeMb = 128;
+        preallocationEnabled = true;
+        maxBuffersPerSize = 4;
+        enablePoolMetrics = true;
+        
+        // Bitmap pool defaults (Story 1.3)
+        useBitmapPool = false;
+        bitmapPoolMaxSizeMb = 64;
+        maxBitmapsPerSize = 3;
+        
         defaultTilingEnabled = true;
         showDetailedTiming = true;
         showMemoryStats = true;
@@ -297,6 +366,8 @@ public class ConfigManager {
     public int getLowMemoryWarningMb() { return lowMemoryWarningMb; }
     public boolean isGcAfterInference() { return gcAfterInference; }
     public boolean isEnableMemoryLogging() { return enableMemoryLogging; }
+    public boolean useDirectByteBuffer() { return useDirectByteBuffer; }
+    public int getDirectMemorySizeMb() { return directMemorySizeMb; }
     public boolean isDefaultTilingEnabled() { return defaultTilingEnabled; }
     public boolean isShowDetailedTiming() { return showDetailedTiming; }
     public boolean isShowMemoryStats() { return showMemoryStats; }
@@ -318,6 +389,23 @@ public class ConfigManager {
     public boolean isAllowFp16OnNpu() { return allowFp16OnNpu; }
     public String getNpuAcceleratorName() { return npuAcceleratorName; }
     public boolean isUseNpuForQuantized() { return useNpuForQuantized; }
+    
+    // Buffer pool getters (Story 1.2)
+    public boolean useBufferPool() { return useBufferPool; }
+    public int getMaxPoolSizeMb() { return maxPoolSizeMb; }
+    public int getPrimaryPoolSizeMb() { return primaryPoolSizeMb; }
+    public int getTilePoolSizeMb() { return tilePoolSizeMb; }
+    public boolean isPreallocationEnabled() { return preallocationEnabled; }
+    public int getMaxBuffersPerSize() { return maxBuffersPerSize; }
+    public boolean isEnablePoolMetrics() { return enablePoolMetrics; }
+    
+    // Bitmap pool getters (Story 1.3)
+    public boolean useBitmapPool() { return useBitmapPool; }
+    public int getBitmapPoolMaxSizeMb() { return bitmapPoolMaxSizeMb; }
+    public int getMaxBitmapsPerSize() { return maxBitmapsPerSize; }
+    
+    // Config access for BitmapPoolManager
+    public JSONObject getConfig() { return config; }
     
     // Runtime configuration update methods
     public void setDefaultTilingEnabled(boolean enabled) {
