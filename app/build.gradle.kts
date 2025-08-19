@@ -14,6 +14,35 @@ android {
         versionName = "2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        
+        // NDK configuration
+        externalNativeBuild {
+            cmake {
+                cppFlags += listOf(
+                    "-std=c++17",
+                    "-fexceptions",
+                    "-frtti",
+                    "-O3",
+                    "-flto",
+                    "-fvisibility=hidden"
+                )
+                
+                // Target ABIs for optimization
+                abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+                
+                arguments += listOf(
+                    "-DANDROID_STL=c++_shared",
+                    "-DANDROID_TOOLCHAIN=clang",
+                    "-DANDROID_ARM_NEON=ON",
+                    "-DANDROID_LD=lld",
+                    "-DANDROID_ALLOW_UNDEFINED_SYMBOLS=TRUE"
+                )
+            }
+        }
+        
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
     }
 
     buildTypes {
@@ -30,13 +59,22 @@ android {
         targetCompatibility = JavaVersion.VERSION_11
     }
     
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+    
     packaging {
         jniLibs {
+            useLegacyPackaging = false
             // Exclude duplicate native libraries if conflicts occur
             pickFirsts.add("lib/x86/libc++_shared.so")
             pickFirsts.add("lib/x86_64/libc++_shared.so")
             pickFirsts.add("lib/arm64-v8a/libc++_shared.so")
             pickFirsts.add("lib/armeabi-v7a/libc++_shared.so")
+            pickFirsts.add("**/*.so")
         }
     }
 }
@@ -51,6 +89,8 @@ dependencies {
     implementation("com.google.ai.edge.litert:litert-metadata:1.4.0")
     implementation("com.google.ai.edge.litert:litert-support:1.4.0")
     testImplementation(libs.junit)
+    testImplementation("org.mockito:mockito-core:5.3.1")
+    testImplementation("org.mockito:mockito-inline:5.2.0")
     androidTestImplementation(libs.ext.junit)
     androidTestImplementation(libs.espresso.core)
 }
