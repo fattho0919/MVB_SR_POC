@@ -16,11 +16,16 @@ add_library(sr_native SHARED
     native-lib.cpp
     sr_engine.cpp
     jni_utils.cpp
+    memory/aligned_allocator.cpp
+    memory/memory_pool.cpp
+    memory/memory_tracker.cpp
+    memory/jni_memory_bridge.cpp
 )
 
 # Include directories
 target_include_directories(sr_native PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/memory
 )
 
 # Link libraries
