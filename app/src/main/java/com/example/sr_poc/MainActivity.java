@@ -112,6 +112,18 @@ public class MainActivity extends AppCompatActivity implements ComponentCallback
         nativeBridge = new NativeBridge();
         if (nativeBridge.isAvailable()) {
             Log.d("MainActivity", "Native library loaded: " + nativeBridge.getVersion());
+            
+            // Initialize native memory pool for optimized allocation
+            NativeBridge.MemoryPoolConfig poolConfig = new NativeBridge.MemoryPoolConfig();
+            // Adjust pool sizes based on device memory if needed
+            boolean poolInitialized = nativeBridge.initializeMemoryPool(poolConfig);
+            if (poolInitialized) {
+                Log.d("MainActivity", "Native memory pool initialized successfully");
+                nativeBridge.warmupMemoryPool(); // Pre-allocate for better initial performance
+            } else {
+                Log.w("MainActivity", "Failed to initialize native memory pool");
+            }
+            
             // Test native functionality
             boolean bufferTest = nativeBridge.testDirectBuffer();
             Log.d("MainActivity", "Native DirectBuffer test: " + (bufferTest ? "PASSED" : "FAILED"));
@@ -622,10 +634,18 @@ public class MainActivity extends AppCompatActivity implements ComponentCallback
             srProcessor = null;
         }
         
-        // Clean up native bridge
+        // Clean up native bridge and memory pool
         if (nativeBridge != null) {
+            // Dump final memory statistics for debugging
+            MemoryStatistics finalStats = nativeBridge.getMemoryStatistics();
+            if (finalStats != null && finalStats.allocationCount > 0) {
+                Log.d("MainActivity", "Final memory pool stats: " + finalStats.toString());
+            }
+            
+            // Reset memory pool before releasing
+            nativeBridge.resetMemoryPool();
             nativeBridge.release();
-            Log.d("MainActivity", "Native bridge released");
+            Log.d("MainActivity", "Native bridge and memory pool released");
         }
         
         // Clean up bitmap pool manager
